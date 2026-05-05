@@ -1,0 +1,222 @@
+---
+title: "Getting Started"
+description: "A practical walkthrough for adding API key authentication to an API, from minimum viable implementation to production."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+This page walks through adding API key authentication to an API that currently has none. It is a practical starting point: a minimum viable implementation that you can extend with the patterns described in the rest of this guide.
+
+<TLDR>
+
+- A minimum viable key system needs four things: key generation, hashed storage, validation middleware, and a way to create and manage keys.
+- Generate keys with a CSPRNG (32 bytes / 256 bits of entropy) and a recognizable prefix; hash with SHA-256 before storage; never keep the raw key.
+- Validation middleware extracts the header, hashes, looks up by hash, returns identical errors for unknown/revoked/expired keys.
+- Ship the core loop first; add rotation, rate limiting, expiration, scope enforcement, and leak detection incrementally.
+- If you are going to want a portal, monetization, or self-service rotation anyway, consider starting with a managed gateway instead of hand-building all of it.
+
+</TLDR>
+
+<HowTo
+  name="Add API key authentication to an API"
+  description="A five-step minimum viable implementation: generate a key, store its hash, validate incoming requests, expose a management endpoint, and back it with a minimal database schema."
+  totalTime="PT1H"
+  steps={[
+    { name: "Generate a key. ", text: "Produce 32 random bytes from a CSPRNG (crypto.randomBytes / secrets.token_bytes) and prefix the encoded string with a recognisable tag such as sk_live_.", url: "https://apikeys.guide/docs/implementation/key-generation" },
+    { name: "Store the hash. ", text: "SHA-256 the raw key, persist the hash plus a short prefix for identification, and return the raw key to the caller exactly once.", url: "https://apikeys.guide/docs/security/hashing-and-storage" },
+    { name: "Write validation middleware. ", text: "Extract the key from the Authorization header, hash it, look the hash up, attach the caller identity to the request, and return an identical error for every failure mode.", url: "https://apikeys.guide/docs/implementation/validation-and-lookup" },
+    { name: "Expose a management endpoint. ", text: "Create POST /admin/api-keys to issue keys and GET /admin/api-keys to list them, returning only prefixes and metadata in the list response." },
+    { name: "Back it with a minimal schema. ", text: "Create a table with id, key_hash (unique), key_prefix, consumer_id, scopes, created_at, and revoked_at, and index key_hash where revoked_at IS NULL." },
+  ]}
+/>
+
+## The Minimum Viable Key System
+
+A working API key system needs four things:
+
+1. A way to **generate** keys
+2. A way to **store** key hashes
+3. **Middleware** that validates keys on incoming requests
+4. A way to **create and manage** keys (even if it starts as a script)
+
+Everything else ([rotation](/docs/security/key-rotation), [rate limiting](/docs/security/rate-limiting), [expiration](/docs/security/expiration-policies), [leak detection](/docs/security/leak-detection)) is important for production but can be added incrementally. Start with the core loop: generate, store, validate.
+
+## Step 1: Generate a Key
+
+Use a cryptographically secure random source. Never use `Math.random()`, UUIDs, or timestamps.
+
+```javascript
+import { randomBytes } from "node:crypto";
+
+function generateApiKey(prefix = "sk_live_") {
+  const random = randomBytes(32).toString("base64url");
+  return `${prefix}${random}`;
+}
+
+// Example output: sk_live_7Ks9xR2mP4wQzJ6vB8nY...
+```
+
+This gives you 256 bits of entropy encoded as a URL-safe base64 string, prefixed with a human-readable identifier. See [Key Generation](/docs/implementation/key-generation) for details on entropy requirements and encoding choices, and [Key Formats & Prefixes](/docs/implementation/key-formats-and-prefixes) for prefix conventions.
+
+## Step 2: Store the Hash
+
+> The database schema for these examples is in [Step 5](#step-5-set-up-the-database) below.
+
+Never store the raw key. Store a SHA-256 hash. The raw key is shown to the developer once at creation and never stored on your side.
+
+```javascript
+import { createHash } from "node:crypto";
+
+function hashKey(apiKey) {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
+// When creating a key:
+const rawKey = generateApiKey();
+const keyHash = hashKey(rawKey);
+
+// Store keyHash in your database
+await db.query(
+  "INSERT INTO api_keys (key_hash, key_prefix, consumer_id, scopes, created_at) VALUES ($1, $2, $3, $4, NOW())",
+  [keyHash, rawKey.slice(0, 8) /* "sk_live_" */, consumerId, ["read"]]
+);
+
+// Return rawKey to the developer -- this is the only time they see it
+```
+
+Index the `key_hash` column for fast lookups. See [Hashing & Storage](/docs/security/hashing-and-storage) for details on why SHA-256 is the right choice for API keys and when to consider salting.
+
+## Step 3: Write the Validation Middleware
+
+The middleware extracts the key from the request, hashes it, looks it up, and attaches the consumer identity to the request.
+
+```javascript
+import { createHash } from "node:crypto";
+
+async function apiKeyAuth(req, res, next) {
+  // Extract the key from the Authorization header
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing API key" });
+  }
+  const apiKey = authHeader.slice(7);
+
+  // Hash and look up
+  const keyHash = createHash("sha256").update(apiKey).digest("hex");
+  const record = await db.query(
+    "SELECT consumer_id, scopes FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+    [keyHash]
+  );
+
+  if (!record) {
+    return res.status(401).json({ error: "Invalid API key" });
+  }
+
+  // Attach identity to the request
+  req.consumer = record;
+  next();
+}
+
+// Use it
+app.use("/api", apiKeyAuth);
+```
+
+This is a simplified version of the [full validation middleware pattern](/docs/implementation/validation-and-lookup#validation-middleware), which covers timing-safe comparison, caching, and error handling in more detail.
+
+**Important:** Return the same error response for "key not found" and "key revoked." Different responses for different failure modes let attackers enumerate valid keys. See [Consistent Error Messages](/docs/implementation/validation-and-lookup#important-consistent-error-messages).
+
+## Step 4: Create a Key Management Endpoint
+
+At minimum, you need a way to create keys and list them. This can start as an admin-only endpoint or even a CLI script.
+
+```javascript
+// POST /admin/api-keys — create a new key
+app.post("/admin/api-keys", adminAuth, async (req, res) => {
+  const { consumerId, scopes } = req.body;
+  const rawKey = generateApiKey();
+  const keyHash = hashKey(rawKey);
+
+  await db.query(
+    "INSERT INTO api_keys (key_hash, key_prefix, consumer_id, scopes, created_at) VALUES ($1, $2, $3, $4, NOW())",
+    [keyHash, rawKey.slice(0, 8) /* "sk_live_" */, consumerId, scopes]
+  );
+
+  // Return the raw key — the only time it is visible
+  res.json({
+    key: rawKey,
+    prefix: rawKey.slice(0, 8),
+    consumer_id: consumerId,
+    scopes,
+  });
+});
+
+// GET /admin/api-keys — list keys (masked)
+app.get("/admin/api-keys", adminAuth, async (req, res) => {
+  const keys = await db.query(
+    "SELECT key_prefix, consumer_id, scopes, created_at FROM api_keys WHERE revoked_at IS NULL"
+  );
+  res.json(keys);
+});
+```
+
+As your needs grow, this evolves into a [self-service developer portal](/docs/operations/developer-portals) with rotation workflows, usage analytics, and role-based access control.
+
+## Step 5: Set Up the Database
+
+A minimal schema:
+
+```sql
+CREATE TABLE api_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL,
+  consumer_id TEXT NOT NULL,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_api_keys_hash ON api_keys (key_hash) WHERE revoked_at IS NULL;
+```
+
+The partial index (`WHERE revoked_at IS NULL`) ensures that lookups only scan active keys, which improves performance as your key count grows. See [Key Management at Scale](/docs/operations/key-management-at-scale) for a fuller schema with metadata, tags, and organization support.
+
+## What to Add Next
+
+Once the core loop works, extend it based on your needs:
+
+| Concern | What to add | Guide |
+| --- | --- | --- |
+| Keys sitting in logs | Add a prefix-based masking filter to your logger | [Logging & Monitoring](/docs/operations/logging-and-monitoring) |
+| No key expiration | Add an `expires_at` column and check it in middleware | [Expiration Policies](/docs/security/expiration-policies) |
+| No rate limiting | Add per-key rate limits using a counter store | [Rate Limiting](/docs/security/rate-limiting) |
+| Key rotation | Support multiple active keys per consumer with grace periods | [Key Rotation](/docs/security/key-rotation) |
+| Scope enforcement | Check scopes against the endpoint's requirements in middleware | [Scoping & Permissions](/docs/security/scoping-and-permissions) |
+| Leaked key response | Register your prefix with GitHub secret scanning | [Leak Detection](/docs/security/leak-detection) |
+| Multiple services | Centralize validation in a gateway or shared library | [Multi-Service Auth](/docs/architecture/multi-service-authentication) |
+| Scaling past DIY | Evaluate a managed gateway or platform | [Build vs. Buy](/docs/architecture/build-vs-buy) |
+
+You do not need all of this on day one. A working key system with hashed storage, prefix-based identification, and consistent error handling is a solid foundation that can grow as your API matures.
+
+## When to Skip the DIY Approach
+
+If several of these apply to you, consider starting with a [managed gateway](/docs/architecture/gateway-based-authentication) or API key platform instead of building the minimum viable system yourself:
+
+- You need to ship key auth within a week
+- Your API will be consumed by external developers who expect a portal, documentation, and self-service key management
+- You plan to [monetize the API](/docs/operations/api-monetization) with usage-based billing
+- You do not have a dedicated backend or platform team to maintain the key system
+- You are already running an API gateway for other reasons
+
+There is no shame in skipping straight to a managed solution. The minimum viable implementation described on this page is valuable for understanding how key auth works under the hood, which helps you evaluate and operate any managed solution you adopt. But if your goal is a production API with key auth, the fastest path may be to use one.
+
+## References
+
+- [OWASP API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x00-introduction/): the risks this minimum viable system exists to mitigate.
+- [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html): baseline requirements for any authentication implementation.
+- [NIST SP 800-63B: Digital Identity Guidelines](https://pages.nist.gov/800-63-3/sp800-63b.html): authenticator lifecycle, issuance, and revocation requirements.
+- [NIST SP 800-90A Rev. 1: Recommendation for Random Number Generation](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final): the specification behind `crypto.randomBytes` and `secrets.token_bytes`.
+- [FIPS 180-4: Secure Hash Standard](https://csrc.nist.gov/pubs/fips/180-4/final): definition of SHA-256, the hash function used in Step 2.
+- [CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator](https://cwe.mitre.org/data/definitions/338.html) and [CWE-312: Cleartext Storage of Sensitive Information](https://cwe.mitre.org/data/definitions/312.html): the two mistakes this walkthrough is designed to keep you from making.

@@ -1,0 +1,153 @@
+---
+title: "Least-Privilege Keys for AI Agents"
+description: "Practical guidance for creating agent-specific API keys with minimal permissions, short lifespans, and runtime injection from secrets managers."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+When an AI agent needs access to an API, it should get the [minimum credentials required](/docs/security/scoping-and-permissions) for the task at hand, nothing more. Treating agent credentials the same as your personal developer keys is a recipe for over-permissioned access in an environment you don't fully control.
+
+<TLDR>
+
+- Never give an agent a personal developer key. Create agent-specific keys with clear labels (`tool: claude-code`, `created-for: ai-agent`) so usage is auditable separately.
+- Default to read-only. Most agent work is diagnostic (reading status, checking schemas, inspecting logs) and doesn't need write permissions.
+- Make keys short-lived (24h or less for session work) and rotate per session. A ~24h TTL caps the blast radius of any leak to the length of the exposure window.
+- Inject credentials at tool-launch time via a secrets manager (1Password CLI, AWS Secrets Manager, Doppler, Vault), never via files the agent can read.
+- For HTTP-based MCP servers, the MCP spec mandates OAuth 2.1 with PKCE. Use it when available and treat static keys as a local-only fallback.
+
+</TLDR>
+
+## Create Agent-Specific Keys
+
+Never share your personal API keys with an AI agent. Create dedicated keys with a clear naming convention so you can identify and audit agent usage separately.
+
+```bash
+# Human developer key
+sk_live_martyn_full_access_7f8a9b0c...
+
+# Agent key -- read-only, limited scope
+sk_live_agent_claude_readonly_3d4e5f6a...
+```
+
+If your API provider supports key metadata or labels, tag the key with its purpose: `created-for: ai-agent`, `tool: claude-code`, `expires: 2025-04-01`.
+
+## Apply the Principle of Least Privilege
+
+### Read-Only When Possible
+
+Most agent interactions with APIs are diagnostic: reading data, checking status, querying schemas. If the agent doesn't need to create, update, or delete resources, issue a read-only key.
+
+```json
+{
+  "name": "agent-claude-code",
+  "permissions": ["read:projects", "read:deployments", "read:logs"],
+  "created": "2025-03-15",
+  "expires": "2025-04-15"
+}
+```
+
+### Scope to Specific Endpoints
+
+If your API provider supports fine-grained permissions, restrict the key to only the endpoints the agent needs. An agent helping you debug a deployment doesn't need access to billing, user management, or key administration.
+
+### Short-Lived Tokens
+
+Set aggressive expiration times. An agent session rarely lasts more than a few hours. A key that expires in 24 hours limits the damage window if it leaks.
+
+```bash
+# Generate a short-lived token via your API
+curl -X POST https://api.example.com/keys \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -d '{
+    "name": "agent-session-2025-03-15",
+    "permissions": ["read:data"],
+    "expires_in": "24h"
+  }'
+```
+
+### Rotate Frequently
+
+Don't reuse agent keys across sessions. Generate a fresh key for each working session, or at minimum [rotate](/docs/security/key-rotation) weekly. Automate this so it doesn't become a manual burden.
+
+## Inject Keys at Runtime with Secrets Managers
+
+The key shouldn't live in a config file [the agent can read](/docs/ai-agents/how-ai-assistants-expose-keys). Instead, inject it at the moment the tool or server process starts.
+
+### 1Password CLI
+
+```bash
+# Inject secrets when launching an MCP server
+op run --env-file=.env.agent -- npx @my-org/mcp-server
+```
+
+Where `.env.agent` references 1Password secret URIs:
+
+```bash
+# .env.agent
+API_KEY=op://Development/Agent API Key/credential
+DB_READ_URL=op://Development/Agent DB ReadOnly/connection-string
+```
+
+### AWS Secrets Manager
+
+```bash
+# Retrieve a secret and export it for the agent process
+export API_KEY=$(aws secretsmanager get-secret-value \
+  --secret-id agent/api-key \
+  --query SecretString \
+  --output text)
+
+npx @my-org/mcp-server
+```
+
+### Doppler
+
+```bash
+# Doppler injects all project secrets as environment variables
+doppler run --project agent-keys --config production -- npx @my-org/mcp-server
+```
+
+### HashiCorp Vault
+
+```bash
+# Fetch a dynamic, short-lived database credential from Vault
+export DB_CREDS=$(vault read -format=json database/creds/agent-readonly)
+export DB_USER=$(echo $DB_CREDS | jq -r '.data.username')
+export DB_PASS=$(echo $DB_CREDS | jq -r '.data.password')
+
+npx @my-org/mcp-server
+```
+
+Vault's dynamic secrets are particularly well-suited for agents: each request generates a unique credential with a built-in TTL, and Vault automatically revokes it when the lease expires.
+
+## Align with the MCP Authorization Spec
+
+The MCP specification's authorization framework builds these principles directly into the protocol for HTTP-based servers:
+
+- **OAuth 2.1 with PKCE** is the required authentication mechanism for remote MCP servers. This eliminates static keys entirely for production agent-to-server communication.
+- **Token expiration** is built in. OAuth access tokens have a defined lifetime, and refresh tokens can be revoked.
+- **Scoped access** is native. OAuth scopes map directly to the least-privilege principle; the agent requests only the scopes it needs.
+- **Dynamic client registration** allows agents to register themselves with an authorization server without pre-shared secrets.
+
+For stdio-based MCP servers (local processes), the OAuth flow isn't applicable. In that case, the guidance above for runtime secret injection applies.
+
+## Checklist
+
+- [ ] Create dedicated API keys for each agent or agent tool
+- [ ] Set permissions to read-only unless writes are explicitly needed
+- [ ] Scope keys to the minimum set of endpoints required
+- [ ] Set expiration to 24 hours or less for session-based work
+- [ ] Use a secrets manager to inject keys at runtime
+- [ ] Never store agent keys in MCP config files or `.env` files in the project directory
+- [ ] Audit agent key usage separately from human developer usage
+
+## References
+
+- [NIST SP 800-53 Rev. 5, AC-6 Least Privilege](https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search): the control this entire page is an application of.
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): the framework that makes per-session, per-tool scoped credentials the default expectation.
+- [Model Context Protocol: Authorization Specification](https://modelcontextprotocol.io/specification/draft/basic/authorization): the OAuth 2.1 + PKCE requirement for HTTP-based MCP servers.
+- [RFC 6749: OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749) and [RFC 7636: PKCE](https://datatracker.ietf.org/doc/html/rfc7636): the protocols the MCP auth spec mandates.
+- [OWASP Top 10 for LLM Applications (2025), LLM06: Sensitive Information Disclosure](https://genai.owasp.org/llmrisk/llm06-sensitive-information-disclosure/): the risk that least-privilege, short-lived agent keys directly mitigate.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): secrets-manager injection patterns referenced throughout this page.

@@ -1,0 +1,186 @@
+---
+title: "Multi-Service Authentication"
+description: "Patterns for consistent API key validation across multiple services, and how to propagate identity internally."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+When you have a single API, key validation is a single middleware function. When you have five, ten, or fifty services that accept API keys, consistency becomes the hard problem. Different services end up with subtly different validation behavior (different caching TTLs, different error formats, different scope-checking logic), and debugging authentication issues across them becomes painful.
+
+<TLDR>
+
+- When key validation is duplicated across services, it drifts: different TTLs, different error formats, inconsistent timing-safe comparison, and gaps an attacker can map out.
+- Three patterns in order of scale: shared library (simplest, works under ~10 services), centralized gateway (one enforcement point, scales with team count), sidecar/service mesh (useful when you already run a mesh).
+- Strip the raw API key at the validation boundary and forward only the consumer identity internally, via injected headers, signed context, or mTLS-authenticated calls.
+- Identity headers (`X-Consumer-Id`, `X-Consumer-Scopes`) are spoofable if internal services are reachable outside the trusted network. Add network isolation, mTLS between services, or signed identity tokens.
+- For async workflows, put the consumer context (ID, plan, scopes) in the message payload. Never the API key itself.
+
+</TLDR>
+
+## The Problem with Per-Service Validation
+
+The [validation middleware pattern](/docs/implementation/validation-and-lookup#validation-middleware) works well for a single service. But when each service implements its own validation without coordination, several problems can emerge:
+
+**Behavioral drift.** Service A caches key lookups for 30 seconds; Service B caches for 5 minutes. Service A returns `401` for revoked keys; Service C returns `403`. These differences are rarely intentional; they accumulate as different teams implement the same requirements at different times.
+
+**Security inconsistency.** One service uses [timing-safe comparison](/docs/implementation/validation-and-lookup#timing-safe-comparison); another does not. One checks [key expiration](/docs/security/expiration-policies); another skips the check because it was added later and nobody updated the older services. An attacker who discovers a gap in one service can exploit it.
+
+**Revocation lag variance.** Each service manages its own [caching layer](/docs/implementation/validation-and-lookup#caching-strategies). When a key is revoked, it may be rejected immediately by services with short TTLs and accepted for minutes by services with longer ones. This makes revocation unpredictable.
+
+**Duplicated effort.** Every service needs code for key extraction, hashing, database lookup, scope checking, rate-limit enforcement, and error formatting. That is identical logic duplicated across every service, each copy requiring its own tests and maintenance.
+
+## Pattern 1: Shared Auth Library
+
+The simplest approach to consistency is a shared library that every service imports.
+
+```javascript
+// @yourorg/api-key-auth — shared across all services
+import { createApiKeyAuth } from "@yourorg/api-key-auth";
+
+const auth = createApiKeyAuth({
+  keyStore: sharedKeyStore,
+  cacheTtlSeconds: 30,
+  requiredScopes: ["products:read"],
+});
+
+app.use("/api/products", auth.middleware());
+```
+
+The library encapsulates key extraction, hashing, lookup, scope checking, and error formatting. All services use the same code path, so behavioral drift is limited to configuration differences.
+
+**Advantages:**
+- Each service still validates keys independently, with no single point of failure
+- Easy to adopt incrementally (add the library to one service at a time)
+- The validation code is auditable and testable
+
+**Limitations:**
+- You need a process to keep all services on the same library version. If Service A runs v2.1 and Service B runs v1.8, you still have drift.
+- Configuration differences (cache TTL, required scopes) can still diverge across services
+- Every service still needs access to the key store (database or cache)
+- Library updates require redeploying every service
+
+The shared library pattern works well for small to medium service counts (under ~10) where a single team owns most services and can coordinate library upgrades.
+
+## Pattern 2: Centralized Gateway
+
+A [gateway-based architecture](/docs/architecture/gateway-based-authentication) eliminates per-service validation entirely. The gateway validates every inbound request and forwards only authenticated traffic to backend services.
+
+```text
+Client → API Gateway (validates key) → Service A, B, C...
+```
+
+**Advantages:**
+- Validation logic lives in exactly one place
+- Adding a new service behind the gateway inherits auth automatically
+- Revocation, caching, and rate limiting are centralized
+- Backend services do not need access to the key store
+
+**Limitations:**
+- The gateway is a single point of failure for authentication (mitigated by running it in a highly available configuration)
+- Adds a network hop to every request
+- Requires infrastructure to run and operate the gateway
+- Services behind the gateway must trust injected identity headers and [verify their origin](/docs/architecture/gateway-based-authentication#how-identity-flows-through)
+
+The gateway pattern is the most common choice for larger service counts or when the services are owned by multiple teams. See the [gateway architecture](/docs/architecture/gateway-based-authentication) page for details on trade-offs and when this makes sense. In practice the enforcement layer is usually Kong, Apigee, Tyk, AWS API Gateway, or a managed programmable gateway like Zuplo — each of them validates the key, strips the `Authorization` header, and forwards the consumer identity to the backend services in a consistent format. [Zuplo documents this specific pattern](https://zuplo.com/docs/guides/user-based-backend-routing?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) under Route to Backends Based on User Identity.
+
+## Pattern 3: Sidecar / Service Mesh
+
+In Kubernetes environments with an existing service mesh (Istio, Linkerd, Envoy-based meshes), auth can run as a sidecar proxy alongside each service. The mesh handles policy distribution: you configure auth rules centrally, and the mesh pushes them to every sidecar.
+
+```text
+Client → Sidecar (validates key) → Service (business logic)
+         [policy from mesh control plane]
+```
+
+**Advantages:**
+- No centralized gateway bottleneck, since each service has its own proxy
+- Centralized configuration but distributed execution
+- Integrates with existing mesh features (mTLS, observability, traffic management)
+
+**Limitations:**
+- Requires a service mesh, which is a significant operational investment if you do not already have one
+- Mesh-based auth policies can be complex to configure and debug
+- Not all service meshes have built-in API key validation; some require custom plugins or external auth services
+
+The sidecar pattern is a good fit when you already run a service mesh and want to add API key auth without introducing a separate gateway. It is rarely worth deploying a mesh solely for key validation.
+
+## Propagating Consumer Identity
+
+Regardless of which pattern validates the key, services behind the auth layer need to know who is making the request. The validated consumer identity (account ID, scopes, metadata, plan tier) needs to flow through the request chain.
+
+### External-to-Internal Boundary
+
+The service that validates the API key (gateway, sidecar, or the first service in the chain) strips the raw key and replaces it with identity information:
+
+```http
+# Incoming request from client:
+Authorization: Bearer zpka_d67b4e3f8a9c42...
+
+# After validation, forwarded to internal services:
+X-Consumer-Id: cust_8f3a2b
+X-Consumer-Scopes: products:read,orders:write
+X-Consumer-Plan: pro
+```
+
+The raw API key should not propagate past the validation boundary. Internal services receive the consumer identity, not the credential.
+
+### Internal Service-to-Service Calls
+
+When Service A calls Service B internally (not in response to an external request), the API key from the original request is not available, and should not be. Internal calls need their own identity mechanism.
+
+Common approaches:
+
+**Forward the consumer context.** If Service A is handling a request on behalf of `cust_8f3a2b` and needs to call Service B, it forwards the `X-Consumer-Id` and `X-Consumer-Scopes` headers. Service B trusts these because the call comes from within the trusted network. This works when calls are synchronous and the internal network is secured (private subnets, mTLS between services).
+
+**Service-level identity.** Each service has its own identity (a service account, mTLS certificate, or internal API key). Service B knows the call came from Service A, but not which consumer triggered it. This is appropriate when Service B does not need consumer context; it only needs to know the call is authorized.
+
+**Combination.** Service A authenticates to Service B using its own service identity (mTLS or internal key) and passes consumer context as metadata. Service B uses the service identity for auth and the consumer context for business logic. This is the most robust pattern for complex architectures.
+
+### Async Workflows
+
+In event-driven architectures (message queues, event buses), the consumer context needs to travel with the message. Include the consumer ID and relevant metadata in the message payload or headers, not the API key.
+
+```json
+{
+  "event": "order.created",
+  "consumer_id": "cust_8f3a2b",
+  "consumer_plan": "pro",
+  "data": { "order_id": "ord_123" }
+}
+```
+
+## Preventing Internal Header Spoofing
+
+Any pattern that uses injected headers for identity is vulnerable if the internal network is not properly secured. An attacker who reaches a backend service directly (bypassing the gateway or sidecar) can forge `X-Consumer-Id` headers and impersonate any consumer.
+
+Mitigations:
+
+- **Network isolation.** Backend services are only reachable from the gateway or mesh, not from the public internet. Use private subnets, security groups, or Kubernetes network policies.
+- **mTLS between services.** Internal calls are authenticated at the transport level. A service only accepts connections from known, certificate-verified peers.
+- **Signed identity tokens.** The gateway signs the consumer identity with a shared secret or private key (e.g., an HMAC-signed header or an internal JWT). Backend services verify the signature before trusting the identity. This is the strongest option when network isolation alone is not sufficient.
+- **Strip external headers.** The gateway strips any `X-Consumer-*` headers from incoming requests before adding its own. This prevents external callers from injecting identity headers that could be mistaken for gateway-injected ones.
+
+## Choosing a Pattern
+
+| Factor | Shared Library | Centralized Gateway | Sidecar / Mesh |
+| --- | --- | --- | --- |
+| Service count | Small (< 10) | Any | Any |
+| Team ownership | Single team | Multiple teams | Multiple teams |
+| Existing infrastructure | None required | Gateway infra needed | Mesh already running |
+| Single point of failure | None (distributed) | Gateway (mitigable) | None (distributed) |
+| Consistency guarantee | Library version discipline | Structural | Mesh config push |
+| Key store access | Every service | Gateway only | Sidecar or external auth |
+| Operational complexity | Low | Medium | High (if adding mesh) |
+
+A common progression is shared library for the first few services, then a gateway as the service count increases or team ownership fragments, with mesh adoption driven by broader infrastructure needs rather than auth specifically. This is not universal; some organizations start with a gateway from day one, particularly when adopting a managed platform.
+
+## References
+
+- [NIST SP 800-204: Security Strategies for Microservices-based Application Systems](https://csrc.nist.gov/publications/detail/sp/800-204/final): the reference for where authentication and authorization belong in multi-service architectures.
+- [NIST SP 800-204A: Building Secure Microservices-based Applications Using Service-Mesh Architecture](https://csrc.nist.gov/publications/detail/sp/800-204a/final): guidance directly relevant to the sidecar/mesh pattern described here.
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): the identity-first model that makes internal header spoofing a first-class threat.
+- [OWASP API Security Top 10 (2023), API8:2023 Security Misconfiguration](https://owasp.org/API-Security/editions/2023/en/0xa8-security-misconfiguration/): the category that inconsistent validation across services falls into.
+- [OWASP API Security Top 10, API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the category that internal-header spoofing and silent validation gaps fall into.
+- [CWE-290: Authentication Bypass by Spoofing](https://cwe.mitre.org/data/definitions/290.html): the weakness that unvalidated `X-Consumer-*` headers invite when backends are directly reachable.

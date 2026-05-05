@@ -1,0 +1,94 @@
+---
+title: "Revocation"
+description: "Strategies for revoking API keys, including immediate vs. deferred revocation, propagation in distributed systems, and audit trail requirements."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Every API key will need to be revoked eventually; design the revocation path as a first-class operation, not a manual database edit.
+- Default to immediate revocation (source-of-truth lookup or rapidly-invalidated cache). Reserve deferred revocation for planned key rotation.
+- In distributed deployments, propagate revocation via pub/sub invalidation plus a short cache TTL so every node converges within seconds.
+- Support both user-initiated (self-service) and admin-initiated (incident response) revocation, and make both paths produce the same audit trail.
+- A revoked key must return the same error as an unknown key, so attackers cannot enumerate which keys ever existed.
+
+</TLDR>
+
+## Why Revocation Cannot Be an Afterthought
+
+Every API key will eventually need to be revoked. An employee leaves, a key is leaked in a public repository, a customer downgrades their plan, or a security audit flags excessive permissions. If your system does not have a clear, fast revocation path, a compromised key remains a live credential until someone manually intervenes, and by then the damage may already be done.
+
+## Immediate vs. Deferred Revocation
+
+**Immediate revocation** means the key stops working the instant the revocation request is processed. This is the right default for security-sensitive events like credential leaks or account compromises. It requires that every authentication check hits the source of truth (database or a rapidly-invalidated cache) rather than relying on long-lived cached authorizations.
+
+**Deferred revocation** allows a grace period before the key becomes invalid. This is occasionally useful when [rotating keys](/docs/security/key-rotation): the old key continues to work for a defined window (minutes to hours) while consumers migrate to the new one. Deferred revocation should be opt-in and bounded, never open-ended.
+
+In practice, most systems should default to immediate revocation and offer deferred revocation only as an explicit option during key rotation workflows.
+
+## Propagation in Distributed Systems
+
+In a single-database architecture, revocation is straightforward: set `revoked_at = NOW()` and every subsequent lookup reflects the change. In distributed systems, propagation is harder.
+
+Common strategies:
+
+- **Cache invalidation via pub/sub.** When a key is revoked, publish an invalidation event to a message bus (Redis pub/sub, Kafka, etc.). All authentication nodes subscribe and evict the key from their local cache immediately.
+- **Short cache TTLs.** If active invalidation is not feasible, keep cache TTLs short (30 to 120 seconds). This caps the window during which a revoked key still authenticates.
+- **Revocation lists.** Maintain a compact, frequently-synced list of recently revoked key hashes. Authentication nodes check this list before accepting a cached result. This is similar to how certificate revocation lists (CRLs) work in TLS.
+- **Token introspection.** For high-security contexts, require a real-time check against a central authority on every request. This eliminates propagation delay entirely at the cost of latency and availability coupling.
+
+The right approach depends on your latency budget and security requirements. For most APIs, pub/sub invalidation with a short TTL fallback provides a good balance. Teams running edge or multi-region gateways usually delegate the revocation fan-out to the gateway's control plane — Kong's cluster sync, Tyk's dashboard propagation, and managed edge platforms like Zuplo all propagate revocation to every node automatically. [Zuplo's API Keys Overview](https://zuplo.com/docs/articles/api-key-management?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) describes how revocation through the portal and management API reaches all 300+ edge locations within seconds.
+
+## User-Initiated vs. Admin-Initiated Revocation
+
+Your system needs to support both paths:
+
+**User-initiated revocation** happens through a dashboard or API. The key owner decides to revoke a key they control, perhaps because they are rotating credentials or decommissioning an integration. This should be self-service, instant, and require no approval workflow.
+
+**Admin-initiated revocation** is triggered by your operations or security team. Common triggers include: detected abuse, a [reported leak](/docs/security/leak-detection), policy violations, or account suspension. Admin revocation should be possible even if the key owner is unresponsive, and should support bulk operations (e.g., revoking all keys for a compromised account).
+
+Both paths should produce the same audit trail and follow the same propagation mechanism.
+
+## Audit Trail Requirements
+
+Every revocation event should be logged with:
+
+- **Who** initiated the revocation (user ID, admin ID, or automated system)
+- **What** was revoked (key identifier or hash, never the raw key)
+- **When** the revocation was requested and when it took effect
+- **Why** it was revoked (reason code: rotation, leak, abuse, account closure, etc.)
+- **How** it was triggered (API call, dashboard action, automated scanner, etc.)
+
+This audit trail is essential for incident response, compliance reporting, and debugging. Store it in an append-only log that is separate from the keys table itself. See [Logging & Monitoring](/docs/operations/logging-and-monitoring) for broader guidance on audit trails for key-based authentication.
+
+## Re-Issuance Patterns
+
+Revocation and re-issuance often happen together. Two common patterns:
+
+**Rotate-then-revoke.** Issue a new key first, give the consumer time to update their integration, then revoke the old key. This is the safest approach for planned rotations and avoids downtime.
+
+**Revoke-then-reissue.** Revoke the compromised key immediately, then issue a replacement. This is the right approach for security incidents where continued use of the old key is unacceptable, even briefly.
+
+In both cases, the new key should be a completely independent credential: new random bytes, new hash, new database record. Never "un-revoke" an old key or reuse its secret material.
+
+## Revocation Checklist
+
+- [ ] Revocation takes effect within your defined SLA (seconds, not hours)
+- [ ] Both self-service and admin revocation paths exist
+- [ ] Distributed caches are invalidated promptly
+- [ ] Audit log captures who, what, when, why, and how
+- [ ] Revoked keys return the same error response as unknown keys
+- [ ] Re-issuance generates fully independent credentials
+- [ ] Bulk revocation is supported for incident response
+
+## References
+
+- [RFC 7009: OAuth 2.0 Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009): the sibling standard for revoking OAuth tokens; many of the same operational requirements apply to API keys.
+- [NIST SP 800-63B: Digital Identity Guidelines §5.2.1](https://pages.nist.gov/800-63-3/sp800-63b.html#-521-general-authenticator-requirements): authenticator revocation and invalidation requirements.
+- [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final): key states including compromised, destroyed, and revoked, and the transitions between them.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the failure modes that make revocation the most load-bearing incident-response control you own.
+- [OWASP Authentication Cheat Sheet: Account management](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html#account-management): baseline requirements for credential lifecycle including invalidation.
+- [CWE-613: Insufficient Session Expiration](https://cwe.mitre.org/data/definitions/613.html): the class of vulnerability that never-revoked keys fall into.

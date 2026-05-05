@@ -1,0 +1,101 @@
+---
+title: "Best Practices for API Providers"
+description: "A comprehensive guide for teams building APIs with key-based authentication, covering generation, storage, rotation, and key lifecycle management."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+If you're building an API that uses key-based authentication, the decisions you make about how keys are generated, stored, and managed will directly affect your consumers' security posture and developer experience. This guide covers the essential practices every API provider should follow.
+
+<TLDR>
+
+- Generate keys from a CSPRNG, give them a recognizable prefix, and include a short non-secret identifier so you can look up the record without scanning every hash.
+- Never store raw keys. Hash irretrievable keys with SHA-256; encrypt retrievable keys with AES-256-GCM and store a hash alongside for fast validation.
+- Support multiple simultaneous keys per account, named labels, last-used timestamps, scope selection, and an expiration option. Every real developer wants all of these.
+- Rate-limit per key, expose `X-RateLimit-*` response headers, and alert account owners on unusual activity (geographic spread, volume spikes, unexpected endpoints).
+- Register your key prefix with GitHub's secret scanning partner program and document authentication clearly. Your docs are part of your security model.
+
+</TLDR>
+
+<YouTubeEmbed id="MZaOYPtnPzw" title="API Key Best Practices" />
+
+## Key Generation
+
+Generating keys correctly is the foundation of your authentication system.
+
+- **Use [cryptographically secure random number generators](/docs/implementation/key-generation).** Never use predictable values, sequential IDs, or weak randomness sources. In most languages, this means using `crypto.randomBytes()` (Node.js), `secrets.token_urlsafe()` (Python), or equivalent.
+- **Make keys long enough to resist brute force.** A minimum of 32 bytes of entropy (resulting in a ~43 character base64-encoded string) is a reasonable baseline.
+- **Use a recognizable prefix.** Prefixes like `sk_live_` or `myapi_` help consumers identify the key's source and environment. This also makes it easier to scan for leaked credentials in code repositories.
+
+```text
+myapi_live_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+myapi_test_x9y8w7v6u5t4s3r2q1p0o9n8m7l6k5j4
+```
+
+- **Include a short, non-secret identifier in the key.** A key ID component (separate from the secret portion) allows you to look up the key without performing a full comparison against every stored hash.
+
+## Secure Storage
+
+- **Never store API keys in plaintext.** The right storage mechanism depends on whether your keys are [retrievable or irretrievable](/docs/security/hashing-and-storage#retrievable-vs-irretrievable-keys). For irretrievable keys, store a one-way hash (SHA-256). For retrievable keys, use authenticated encryption (AES-256-GCM) and store a SHA-256 hash alongside for fast validation. See [Hashing & Storage](/docs/security/hashing-and-storage) for the full trade-off and implementation guidance.
+- **Store only a truncated version for display.** Keep the last four characters so consumers can identify which key is which in your dashboard (e.g., `myapi_live_****o5p6`).
+- **Decide on retrievable vs. irretrievable.** If your API handles sensitive operations and your consumers have access to secrets management tooling, show the key once at creation and store only a hash (the Stripe/AWS model). If your audience is broader and may not store keys securely, consider the retrievable model so consumers can return to your dashboard instead of copying keys into insecure locations. See [Hashing & Storage](/docs/security/hashing-and-storage#retrievable-vs-irretrievable-keys) for guidance.
+
+## Key Management UI
+
+A good key management experience reduces friction and improves security.
+
+- [ ] **Support multiple keys per account.** Consumers need separate keys for different services, environments, and team members. One key per account forces bad practices like sharing credentials.
+- [ ] **Provide a self-service dashboard.** Consumers should be able to create, view (masked), revoke, and rotate keys without contacting support.
+- [ ] **Allow consumers to name or label keys.** Labels like "Production - Payment Service" make it easy to audit which key is used where.
+- [ ] **Display creation date and last-used timestamp.** This helps consumers identify stale or compromised keys.
+- [ ] **Support key expiration dates.** Allow consumers to optionally set an expiration, and send notifications before keys expire.
+
+## Rotation Support
+
+Key rotation is a critical security practice, and your API should make it painless.
+
+- [ ] **Allow multiple active keys simultaneously.** This enables [zero-downtime rotation](/docs/security/key-rotation): create a new key, deploy it, then [revoke](/docs/security/revocation) the old one.
+- [ ] **Provide a dedicated rotation endpoint or workflow.** A single "rotate" action that creates a new key and schedules the old one for deactivation (with a grace period) is ideal.
+- [ ] **Send notifications before forced rotations.** If you enforce key expiration, give consumers ample warning (30 days, 7 days, 1 day) via email and dashboard alerts.
+
+## Scope and Permissions
+
+- [ ] **Support [granular scopes](/docs/security/scoping-and-permissions).** Let consumers create keys that are limited to specific operations (read-only, write-only, admin). This follows the principle of least privilege.
+- [ ] **Allow IP address restrictions.** For server-to-server use cases, letting consumers lock a key to a set of IP addresses adds a meaningful layer of protection.
+- [ ] **Support environment separation.** Provide distinct key sets for test/sandbox and production environments with clear visual differentiation.
+
+## Usage Analytics and Rate Limiting
+
+- [ ] **Provide per-key usage analytics.** Show request counts, error rates, and latency data broken down by key. This helps consumers monitor their integrations and detect anomalies.
+- [ ] **Implement per-key rate limiting.** Rate limits should be applied at the key level, and current usage should be visible in response headers.
+
+```http
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 847
+X-RateLimit-Reset: 1713100800
+```
+
+- [ ] **Alert on unusual activity.** Sudden spikes in usage or requests from unexpected regions are indicators of a compromised key. Notify the account owner.
+
+## Documentation
+
+Your documentation is part of your security model.
+
+- [ ] **Document authentication clearly on a dedicated page**, not buried in a Getting Started guide.
+- [ ] **Provide code examples in multiple languages** showing how to securely pass the key (typically via the `Authorization` header using a Bearer token or a custom scheme).
+- [ ] **Explain your key format and prefix conventions** so consumers know what to expect.
+- [ ] **Document rate limits, scopes, and error responses** related to authentication failures (401, 403, 429).
+- [ ] **Include guidance on secure key storage** for your consumers. Point them toward environment variables and secrets managers rather than hardcoded values.
+
+Getting key-based authentication right is not just a security exercise; it is a developer experience decision. Every friction point you remove from key management is one less reason for a consumer to take shortcuts that put both of you at risk.
+
+## References
+
+- [OWASP API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x00-introduction/): the provider-side risk catalog this checklist is designed against.
+- [OWASP Application Security Verification Standard (ASVS)](https://owasp.org/www-project-application-security-verification-standard/): verification requirements you can use to confirm your implementation actually meets its claims.
+- [NIST SP 800-63B: Digital Identity Guidelines](https://pages.nist.gov/800-63-3/sp800-63b.html): formal requirements for authenticator issuance, verification, and lifecycle.
+- [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final): cryptoperiods and key-state transitions that the rotation and expiration items on this page depend on.
+- [GitHub: Secret scanning partner program](https://docs.github.com/en/code-security/secret-scanning/secret-scanning-partner-program): registration details so GitHub will webhook you when your keys leak publicly.
+- [Google Cloud: API keys best practices](https://cloud.google.com/docs/authentication/api-keys-best-practices): a reference implementation from a major provider that covers most of the same ground as this page.

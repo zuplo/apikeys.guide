@@ -1,0 +1,73 @@
+---
+title: "How API Keys Work"
+description: "The lifecycle of an API key from provisioning to enforcement, including how to send keys in requests and how servers validate them."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+The lifecycle of an API key is straightforward:
+
+<TLDR>
+
+- An API key's lifecycle has four stages: provisioning, inclusion in requests, server-side validation, and policy enforcement.
+- Keys belong in the `Authorization` header as `Bearer <key>` (per RFC 6750), not in query strings, because URLs leak to logs, history, and referrers.
+- Servers should hash presented keys with SHA-256 and look them up by hash, never by raw value.
+- Validation is also where rate limits, scopes, IP allowlists, and expiration are enforced before the request reaches business logic.
+- Fast validation depends on an indexed hash column plus a short-TTL cache; latency on this path affects every authenticated request.
+
+</TLDR>
+
+1. **Provisioning:** A developer registers with an API provider and receives one or more API keys, usually through a dashboard or management API.
+2. **Inclusion in requests:** The developer's application includes the key in every request it makes, most commonly in an HTTP header or as a query parameter.
+3. **Server-side validation:** The API server extracts the key from the incoming request, looks it up in its data store, and determines whether the request should be allowed.
+4. **Enforcement:** Based on the key lookup, the server can enforce rate limits, track usage, check permissions, and log the request against the correct account.
+
+## Sending an API Key
+
+The two most common ways to include an API key in a request are via a request header or a query parameter.
+
+**Request header (recommended):**
+
+```bash
+curl -H "Authorization: Bearer zpka_d67b4e3f8a9c42..." \
+  https://api.example.com/v1/products
+```
+
+```javascript
+const response = await fetch("https://api.example.com/v1/products", {
+  headers: {
+    Authorization: "Bearer zpka_d67b4e3f8a9c42...",
+  },
+});
+```
+
+**Query parameter (less secure):**
+
+```text
+https://api.example.com/v1/products?api_key=zpka_d67b4e3f8a9c42...
+```
+
+Headers are strongly preferred because query parameters can leak into server logs, browser history, and referrer headers. Most modern APIs accept keys exclusively through headers.
+
+## How the Server Validates a Key
+
+When a request arrives, the server typically follows these steps:
+
+1. **Extract** the key from the `Authorization` header (or other configured location).
+2. **Hash** the key using a one-way hash function like SHA-256. Well-designed systems [never store raw API keys](/docs/security/hashing-and-storage); they store hashes, just like passwords.
+3. **Look up** the hash in a database or cache to find the associated account, permissions, and rate-limit tier.
+4. **Check status:** is the key active, expired, or revoked?
+5. **Enforce policies:** apply [rate limits](/docs/security/rate-limiting), [scope restrictions](/docs/security/scoping-and-permissions), and IP allowlists before forwarding the request to the upstream service.
+
+This lookup is usually backed by a fast data store (in-memory cache or key-value database) so that key validation adds minimal latency to the request path.
+
+## References
+
+- [RFC 6750: OAuth 2.0 Authorization Framework: Bearer Token Usage](https://datatracker.ietf.org/doc/html/rfc6750): defines the `Authorization: Bearer` scheme that API keys reuse.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): failure modes in the validation path described on this page.
+- [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html): general requirements for credential handling and error responses.
+- [NIST SP 800-63B: Digital Identity Guidelines: Authenticators and Lifecycle](https://pages.nist.gov/800-63-3/sp800-63b.html): lifecycle requirements for issuance, verification, and revocation of authenticators.
+- [Google Cloud: API keys best practices](https://cloud.google.com/docs/authentication/api-keys-best-practices): a reference implementation of the send-validate-enforce loop.
+- [CWE-312: Cleartext Storage of Sensitive Information](https://cwe.mitre.org/data/definitions/312.html): why raw keys should never land in a database or log, even transiently.

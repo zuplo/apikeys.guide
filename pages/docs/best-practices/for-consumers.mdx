@@ -1,0 +1,103 @@
+---
+title: "Best Practices for API Consumers"
+description: "A practical guide for developers consuming APIs with key-based authentication, covering secure storage, rotation, environment separation, and monitoring."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+When you're integrating with an API that uses key-based authentication, how you handle that key is just as important as how the provider generated it. A leaked or mismanaged API key can lead to unauthorized access, unexpected charges, and data breaches. This guide covers the practices that keep your keys safe.
+
+<TLDR>
+
+- Never hardcode API keys in source code. Environment variables for local dev, a dedicated secrets manager (Vault, AWS Secrets Manager, Doppler, 1Password) for production.
+- Never commit keys to Git. Even a later-deleted commit lives in the repo history. Use `.gitignore`, pre-commit scanners (gitleaks, truffleHog), and rotate immediately if a key ever leaks.
+- Use separate keys per environment (dev / staging / prod) and restrict production keys to deployment pipelines and production servers.
+- Rotate on a schedule (e.g., 90 days), automate where possible, and request the narrowest scopes and IP restrictions the provider supports.
+- Keep keys server-side. If you need credentialed calls from browsers or mobile apps, use a backend-for-frontend proxy or short-lived tokens. Never ship long-lived keys to the client.
+
+</TLDR>
+
+## Store Keys Securely
+
+The cardinal rule: never hardcode API keys in your source code.
+
+**Use environment variables** for local development and simple deployments. Most frameworks and runtimes support `.env` files that are loaded at startup.
+
+```bash
+# .env (never committed to version control)
+ACME_API_KEY=myapi_live_a1b2c3d4e5f6g7h8i9j0
+```
+
+```javascript
+// Access it in your code
+const apiKey = process.env.ACME_API_KEY;
+```
+
+**Use a secrets manager for production.** Services like AWS Secrets Manager, Google Secret Manager, HashiCorp Vault, or Azure Key Vault provide encryption at rest, access auditing, and automated rotation. The small operational overhead is worth it.
+
+**Never store keys in:**
+- Source code or configuration files that get committed
+- Client-side code (JavaScript bundles, mobile app binaries)
+- Wiki pages, Slack messages, or email
+- Docker images or CI/CD pipeline definitions (use their built-in secret management instead)
+
+## Never Commit Keys to Git
+
+This is the single most common way API keys get leaked. Even if you remove a key in a later commit, it remains in the repository history.
+
+- **Add secret files to `.gitignore`** before your first commit. Include `.env`, `.env.local`, and any other files that hold secrets.
+- **Use pre-commit hooks** to scan for accidentally staged secrets. Tools like `git-secrets`, `truffleHog`, or `gitleaks` can [catch keys before they reach your repository](/docs/security/leak-detection).
+- **If a key is committed, [rotate](/docs/security/key-rotation) it immediately.** Don't just delete it from the code. The key is already compromised if the repository has been pushed to a remote. Revoke the old key and generate a new one.
+
+## Use Separate Keys Per Environment
+
+Never use the same API key across development, staging, and production.
+
+- **Create distinct keys for each environment.** Most providers offer test/sandbox keys alongside production keys. Use them.
+- **Use different key names or prefixes** in your configuration to make it obvious which environment you're targeting. This prevents accidentally running test code against production data.
+- **Restrict production key access** to deployment pipelines and production servers. Developers should only need test keys on their local machines.
+
+## Rotate Keys Regularly
+
+Key rotation limits the blast radius of a compromise. Even if a key leaks, it won't be valid forever.
+
+- **Set a rotation schedule** (e.g., every 90 days) and treat it as routine maintenance, not an emergency procedure.
+- **Use zero-downtime rotation** when the provider supports multiple active keys: create the new key, deploy it to all services, then revoke the old key.
+- **Automate rotation** where possible. Many secrets managers can rotate keys on a schedule and update your application configuration automatically.
+
+## Restrict Key Scope
+
+If the API provider supports it, always use the most restrictive permissions possible.
+
+- **Request only the [scopes](/docs/security/scoping-and-permissions) you need.** A service that only reads data should not have a key with write permissions.
+- **Use IP restrictions** for server-to-server integrations where your egress IPs are known and stable.
+- **Create separate keys for separate services.** If you have a billing service and an analytics service both calling the same API, give each its own key. This makes auditing easier and limits the impact if one service is compromised.
+
+## Monitor Your Usage
+
+Don't wait for your provider to notify you of a problem.
+
+- **Check your API dashboard regularly** for unexpected usage patterns, such as spikes in request volume, requests from unfamiliar IP addresses, or elevated error rates.
+- **Set up billing alerts** if the API charges per request. A compromised key can rack up significant costs before anyone notices.
+- **Log API responses on your side**, paying attention to 401 (unauthorized) and 429 (rate limited) status codes that could indicate key issues or abuse.
+
+## Keep Keys Server-Side
+
+API keys should never be exposed to end users.
+
+- **Make API calls from your backend**, not from browser JavaScript or mobile apps. Client-side code is always inspectable.
+- **If you need client-side API access**, use the provider's recommended approach (typically short-lived tokens issued by your server, or a dedicated public/restricted key type).
+- **Use a backend-for-frontend (BFF) pattern** to proxy API calls through your server, keeping the key out of the client entirely.
+
+Treating API keys with the same care you give passwords and private keys is not paranoia; it's professional practice. The few minutes spent setting up proper key management can save you from hours of incident response.
+
+## References
+
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): the authoritative reference for storing, rotating, and injecting secrets like API keys.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the provider-side risk that consumer-side mistakes most directly enable.
+- [CWE-798: Use of Hard-coded Credentials](https://cwe.mitre.org/data/definitions/798.html): the weakness directly addressed by "never hardcode keys."
+- [CWE-522: Insufficiently Protected Credentials](https://cwe.mitre.org/data/definitions/522.html): the weakness that "keep keys server-side, don't ship them in client bundles" addresses.
+- [GitHub: About secret scanning](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning) and [push protection](https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection): the platform-side backstop when a key slips through your own pre-commit checks.
+- [Google Cloud: API keys best practices](https://cloud.google.com/docs/authentication/api-keys-best-practices): a reference list of consumer-side practices that aligns with the ones on this page.

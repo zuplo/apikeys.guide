@@ -1,0 +1,196 @@
+---
+title: "Migration Strategies"
+description: "How to migrate from a homegrown API key system to a managed platform, or between key systems, without breaking consumers."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+At some point, many teams need to migrate their API key system, whether moving from a homegrown solution to a managed platform, swapping one gateway for another, or consolidating multiple key systems into one. The hard part is not the new system. It is doing the migration without breaking existing consumers who are using keys issued by the old system.
+
+<TLDR>
+
+- API key migrations are hard because credentials are distributed across your consumers' systems. You control your side; you don't control their deployment cadence.
+- Dual-stack authentication (route by prefix, accept both old and new keys) is the default strategy: zero downtime, consumers migrate on their schedule, but you operate two auth systems for months.
+- Transparent re-issuance is proactive: create new keys in the new system for each consumer, set a deadline, run dual-stack during the transition, then revoke the old keys.
+- Proxy-based migration translates between formats and is the most transparent option, but adds latency and a new critical-path dependency.
+- Don't cut over on a calendar date; cut over when metrics say it's safe (target < 1% old-format traffic). Keep the legacy system read-only for at least one billing cycle as a rollback.
+
+</TLDR>
+
+This page covers strategies for migrating API key infrastructure with minimal consumer disruption.
+
+## Why Migrations Are Hard
+
+An API key migration is unlike a typical database migration or service refactor. The challenge is that the credentials are distributed: your consumers have the keys embedded in their applications, CI/CD pipelines, environment variables, and secrets managers. You cannot simply update your side and expect everything to keep working.
+
+**Keys are bearer tokens.** The old system issued keys in a specific format. The new system may use a different format, prefix, or length. Consumers cannot use old-format keys with a system that expects new-format keys.
+
+**Keys are hashed.** If the old system stores SHA-256 hashes of keys, you cannot extract the raw keys to re-hash them for the new system. You have the hashes, not the originals.
+
+**Consumers update on their own schedule.** You can notify consumers that they need to rotate, but you cannot force them to do it by Tuesday. Some will update within hours; others will take months. Some will not update until their integration breaks.
+
+This is why most teams reach for a gateway rather than trying to run dual-stack logic inside the application. Kong's migration tooling, Apigee's proxy-based migration flows, AWS API Gateway's stage-level authorizers, and managed options like Zuplo all exist to host the prefix-routed dual-stack described below. [Zuplo publishes named migration guides](https://zuplo.com/docs/articles/migration-overview?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) for teams moving off Kong, Apigee, AWS API Gateway, and Azure API Management, which is one reason gateway-hosted dual-stack has become the default answer for this problem.
+
+## Strategy 1: Dual-Stack Authentication
+
+Run both the old and new key systems simultaneously. Route incoming requests to the appropriate system based on the [key prefix](/docs/implementation/key-formats-and-prefixes).
+
+```javascript
+function authenticate(req) {
+  const key = extractKey(req);
+
+  if (key.startsWith("zpka_")) {
+    return newAuthSystem.validate(key);
+  }
+  if (key.startsWith("sk_")) {
+    return legacyAuthSystem.validate(key);
+  }
+  return { valid: false, error: "Unknown key format" };
+}
+```
+
+This approach is described in the [prefix-based routing](/docs/implementation/validation-and-lookup#prefix-based-routing) section of the validation page. The key insight: prefixes make it possible to identify which system issued a key without querying either system.
+
+**How it works:**
+
+1. Deploy the new key system alongside the old one
+2. New consumers receive keys from the new system (with new-format prefixes)
+3. Existing consumers continue using their old keys, which route to the legacy system
+4. As consumers rotate their keys (on their own schedule or prompted by you), they receive new-format keys
+5. Once traffic from old-format keys drops to zero (or an acceptable threshold), decommission the legacy system
+
+**Advantages:**
+- Zero downtime for existing consumers
+- No forced re-keying
+- Consumers migrate at their own pace
+- Clear separation between old and new systems
+
+**Limitations:**
+- You operate two auth systems in parallel, which increases operational burden
+- The dual-stack period can last months if consumers are slow to rotate
+- Both systems need consistent behavior (same error formats, same rate-limit enforcement) to avoid confusing consumers during the transition
+
+## Strategy 2: Transparent Key Re-Issuance
+
+Issue new keys through the new system and map them to the same consumer identities, while keeping the old keys active during a transition period.
+
+**How it works:**
+
+1. For each consumer in the old system, create a corresponding consumer in the new system
+2. Issue new keys through the new system, associated with the migrated consumer records
+3. Notify consumers of their new keys (via email, portal, or API) with a deadline for switching
+4. Run dual-stack authentication (old and new keys are both valid) during the transition period
+5. After the deadline, revoke old keys
+
+This is similar to dual-stack but with a proactive push: instead of waiting for consumers to notice, you issue new keys and set a migration deadline.
+
+**Advantages:**
+- Proactive: you control the timeline instead of waiting for organic rotation
+- Consumers get explicit instructions and new keys rather than discovering the migration through errors
+- Consumer metadata can be verified during the migration, not after
+
+**Limitations:**
+- Requires a communication and coordination effort proportional to your consumer count
+- Consumers who ignore the migration notifications will still need dual-stack support
+- New keys need to be delivered securely (through the portal, not via email)
+
+**Consumer metadata migration:** Scopes, rate-limit tiers, plan data, and any custom metadata need to be migrated alongside the key identity. Map the old system's data model to the new system's model before issuing new keys. Mismatches here (for example, a consumer who had `write` access in the old system but only `read` in the new) will surface as broken integrations.
+
+## Strategy 3: Proxy-Based Migration
+
+Place a proxy in front of both systems that translates requests between old and new key formats. The proxy validates old-format keys against the legacy system and, on success, creates or retrieves the equivalent identity in the new system.
+
+**How it works:**
+
+1. Deploy a thin proxy between clients and your API
+2. The proxy checks if the key is old-format or new-format
+3. For old-format keys: validate against the legacy system, then forward the request with the consumer identity from the legacy system
+4. For new-format keys: validate against the new system directly
+5. Over time, migrate consumers from old to new keys
+
+This is the most transparent option for consumers, since they do not need to change anything until you are ready to force the switch. But the proxy adds latency and operational complexity, and it becomes a critical path dependency during the migration.
+
+## Planning the Migration
+
+Regardless of which strategy you choose, these steps apply:
+
+### Audit Your Current State
+
+Before migrating, understand what you have:
+
+- How many active keys exist?
+- What is the distribution of key age? (Keys last used 6+ months ago may be abandoned)
+- Which consumers are high-traffic? (These need the most careful migration)
+- What metadata is associated with each consumer? (Scopes, rate limits, plan data)
+- Are there keys with unusual configurations that the new system may not support?
+
+### Set a Migration Timeline
+
+A realistic migration timeline accounts for the slowest consumers, not the fastest.
+
+| Phase | Duration | Activity |
+| --- | --- | --- |
+| Preparation | 1-2 weeks | Deploy new system, migrate consumer metadata, test dual-stack |
+| Soft launch | 2-4 weeks | New consumers get new-format keys; old consumers continue unchanged |
+| Active migration | 1-3 months | Notify existing consumers, provide new keys, track adoption |
+| Grace period | 2-4 weeks | Final warnings to consumers still using old keys |
+| Cutover | 1 day | Revoke remaining old keys, decommission legacy system |
+
+For APIs with a large consumer base (hundreds or thousands of active consumers), the active-migration phase will be the longest. Do not underestimate it.
+
+### Communicate Early and Often
+
+Consumers need clear, advance notice of the migration. A communication plan typically includes:
+
+- **Announcement** (8-12 weeks before cutover): What is changing, why, and the timeline
+- **Migration instructions** (6-8 weeks before): Step-by-step guide for switching to new keys
+- **Reminder** (2-4 weeks before): List of consumers who have not migrated yet
+- **Final warning** (1 week before): Direct notification to remaining consumers
+- **Cutover notification** (day of): Confirmation that old keys are now invalid
+
+Use multiple channels: email, dashboard banners, API response headers (e.g., `X-API-Key-Deprecation: 2026-09-01`), and documentation updates.
+
+### Test the Rollback Plan
+
+Migrations fail. Have a plan for what happens if the new system does not perform as expected:
+
+- Can you re-enable the legacy system if the new system has issues?
+- If consumers have already switched to new keys, can the legacy system accept them?
+- What is your monitoring threshold for "this is not working" and who decides to roll back?
+
+The safest approach is to keep the legacy system running (read-only, no new key issuance) for at least one billing cycle after cutover. This gives you a fallback if issues surface after the migration appears complete.
+
+## Migrating Consumer Data
+
+Key migration is not just about credentials; you also need to move the metadata attached to each consumer. The consumer data model may not map cleanly between systems. Common mismatches:
+
+**Scope models.** The old system may use a flat string (`read,write`) while the new system expects structured scopes (`products:read`, `products:write`). Build a mapping table and validate it before migration.
+
+**Rate-limit configuration.** The old system may enforce limits per key; the new system may enforce per consumer (across all of a consumer's keys). Verify that the new system's enforcement model matches consumer expectations.
+
+**Metadata fields.** The old system may store arbitrary JSON metadata; the new system may have a fixed schema. Identify metadata fields that do not map and decide how to handle them (migrate to tags, custom fields, or drop them with consumer notification).
+
+**Key identifiers.** The old system may expose key IDs that consumers use in their own systems (for logging, support tickets, dashboard references). If the new system generates different IDs, consumers who reference old IDs in their logs or tooling will lose that linkage.
+
+## Metrics for a Successful Migration
+
+Track these during the migration to know when it is safe to cut over:
+
+- **Percentage of traffic from old-format keys** (target: < 1% before cutover)
+- **Number of active consumers still using old keys** (target: 0, or known exceptions with extended grace periods)
+- **Error rate on new-system validation** (should be at or below old-system baseline)
+- **Authentication latency** (new system should not be slower than old)
+- **Consumer support tickets related to the migration** (a spike indicates communication or tooling gaps)
+
+Do not cut over based on a calendar date alone. Cut over when the metrics say it is safe.
+
+## References
+
+- [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management (§8 Key States and Transitions)](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final): the formal model for "old key active," "transition," "deactivated," and "destroyed" that mirrors the migration phases on this page.
+- [NIST SP 800-63B: Digital Identity Guidelines §6 Authenticator Lifecycle](https://pages.nist.gov/800-63-3/sp800-63b.html#lifecycle): requirements for replacing authenticators without loss of binding to the subscriber identity.
+- [OWASP Secrets Management Cheat Sheet: Rotation and replacement](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html#8-secrets-lifecycle): operational patterns for migrating secrets between systems.
+- [OWASP API Security Top 10 (2023), API8:2023 Security Misconfiguration](https://owasp.org/API-Security/editions/2023/en/0xa8-security-misconfiguration/): the risk category that "inconsistent behavior between old and new systems during dual-stack" falls into.
+- [OWASP API Security Top 10, API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the risk migrations must avoid introducing as they reshape the validation path.
+- [CWE-613: Insufficient Session Expiration](https://cwe.mitre.org/data/definitions/613.html): the weakness that unbounded grace periods on old keys can drift into.

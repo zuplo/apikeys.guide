@@ -1,0 +1,34 @@
+{
+  "name": "apikeys-guide",
+  "type": "module",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "gen:css": "node scripts/gen-css.cjs",
+    "gen:og": "node scripts/gen-og.mjs",
+    "gen:dates": "node scripts/gen-doc-meta.cjs",
+    "dev": "pnpm gen:css && pnpm gen:dates && pnpm gen:og && zudoku dev --port 4321 --ssr false",
+    "build": "pnpm gen:css && pnpm gen:dates && pnpm gen:og && zudoku build && node scripts/postbuild.cjs",
+    "preview": "zudoku preview --port 4321",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "posthog-js": "^1.368.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router": "7.13.0",
+    "zudoku": "^0.76.0"
+  },
+  "devDependencies": {
+    "@fontsource/dm-sans": "^5.2.5",
+    "@playwright/test": "^1.59.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^22.10.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "satori": "^0.12.2",
+    "typescript": "^5.9.3"
+  }
+}

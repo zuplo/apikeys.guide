@@ -1,0 +1,152 @@
+---
+title: "Scoping & Permissions"
+description: "How to apply the principle of least privilege to API keys through scopes, resource-level permissions, and environment separation."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Every API key should carry the minimum permissions required for its job. The principle of least privilege is the control that caps blast radius when a key leaks.
+- Start with read vs. write scopes at minimum; add resource-level constraints (organization, project, team) for multi-tenant systems.
+- Use environment-specific prefixes (`sk_live_`, `sk_staging_`, `sk_test_`) so a production key cannot be confused for a test key in CI or vice versa.
+- Make scopes immutable on a key: if a consumer needs different permissions, they create a new key and retire the old one. This prevents silent privilege escalation.
+- Document every available scope and which endpoints it unlocks; undocumented scopes become "everyone picks admin" in practice.
+
+</TLDR>
+
+## The Principle of Least Privilege
+
+Every API key should have the minimum permissions required to do its job. A key used by a frontend to fetch product listings should not be able to delete user accounts. A key used by a CI pipeline to deploy code should not be able to read billing data.
+
+Over-privileged keys are dangerous because they amplify the impact of any compromise. If an attacker obtains a key scoped to read-only access on a single resource, the blast radius is small. If they obtain an unrestricted admin key, the blast radius is your entire platform.
+
+## Read/Write Scopes
+
+The simplest form of scoping separates read operations from write operations. When a consumer creates a key, they select which scopes the key should have:
+
+| Scope | Allows |
+|---|---|
+| `read:products` | GET /products, GET /products/:id |
+| `write:products` | POST /products, PUT /products/:id, DELETE /products/:id |
+| `read:orders` | GET /orders, GET /orders/:id |
+| `write:orders` | POST /orders, PUT /orders/:id |
+
+A key with only `read:products` cannot create, update, or delete products, and it cannot access orders at all.
+
+Your API gateway or middleware checks the key's scopes on every request and rejects any call that falls outside the key's permissions:
+
+```javascript
+function checkScope(requiredScope, keyScopes) {
+  if (!keyScopes.includes(requiredScope)) {
+    return {
+      status: 403,
+      body: {
+        error: "forbidden",
+        message: `This key does not have the '${requiredScope}' scope.`,
+      },
+    };
+  }
+  return null; // Access granted
+}
+```
+
+## Resource-Level Scoping
+
+Scopes control what actions a key can perform. Resource-level scoping controls which specific resources the key can access.
+
+For example, in a multi-tenant system, a key might be scoped to a single organization:
+
+```json
+{
+  "key_id": "key_8f3a2b",
+  "scopes": ["read:projects", "write:projects"],
+  "resource_constraints": {
+    "organization_id": "org_12345"
+  }
+}
+```
+
+This key can read and write projects, but only within `org_12345`. Even if the consumer guesses a valid project ID belonging to a different organization, the request is denied.
+
+Resource-level scoping is especially important for platforms where one customer's API key should never be able to access another customer's data.
+
+## Environment Separation
+
+Keys should be tied to a specific environment. A production key should not work in staging, and a staging key should not work in production. This prevents accidental cross-environment calls and limits the damage from a leaked test key.
+
+Use distinct [prefixes](/docs/implementation/key-formats-and-prefixes) to make the environment obvious:
+
+| Environment | Prefix | Example |
+|---|---|---|
+| Production | `sk_live_` | `sk_live_7f8a9b0c...` |
+| Staging | `sk_staging_` | `sk_staging_3d4e5f...` |
+| Development | `sk_dev_` | `sk_dev_1a2b3c...` |
+| Test | `sk_test_` | `sk_test_9x8y7z...` |
+
+This convention makes it immediately clear which environment a key belongs to. It also makes it trivial to write CI/CD checks that reject production keys in test configurations, and vice versa.
+
+## Storing and Enforcing Scopes
+
+Scopes can be stored as a JSON array or a comma-separated string in your database alongside the key hash:
+
+```sql
+CREATE TABLE api_keys (
+  id TEXT PRIMARY KEY,
+  key_hash TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '[]',  -- JSON array: '["read:products","write:products"]'
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+Here is a middleware that loads the key's scopes and checks them against the scope required by the current endpoint:
+
+```javascript
+function requireScope(requiredScope) {
+  return (req, res, next) => {
+    const scopes = JSON.parse(req.apiKeyRecord.scopes);
+
+    if (!scopes.includes(requiredScope)) {
+      return res.status(403).json({
+        error: "forbidden",
+        message: `This key does not have the '${requiredScope}' scope.`,
+      });
+    }
+
+    next();
+  };
+}
+
+// Usage: attach to specific routes
+app.get("/products", apiKeyAuth, requireScope("read:products"), listProducts);
+app.post("/products", apiKeyAuth, requireScope("write:products"), createProduct);
+```
+
+This pattern keeps scope enforcement declarative: each route states what it needs, and the middleware handles the check.
+
+## Per-Key Permissions in Practice
+
+When designing your key management system, consider these patterns:
+
+### Hierarchical scopes
+
+Use wildcards for convenience without sacrificing control. `write:products` implies `read:products`. `admin:*` grants full access. Define the hierarchy explicitly so there are no surprises.
+
+### Immutable scopes
+
+Once a key is created, its scopes cannot be changed. If a consumer needs different permissions, they create a new key with the right scopes and [retire the old one](/docs/security/revocation). This creates a clear audit trail and avoids the risk of privilege escalation on an already-deployed key.
+
+### Scope documentation
+
+List every available scope in your API documentation, along with which endpoints each scope unlocks. Consumers should never have to guess which scopes they need.
+
+## References
+
+- [NIST SP 800-53 Rev. 5, AC-6 Least Privilege](https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search): the formal control that codifies the principle this page is built around.
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): framework in which every request is re-authorized; scoped credentials are a prerequisite.
+- [OWASP API Security Top 10 (2023), API1:2023 Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) and [API5:2023 Broken Function Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/): the categories of failure that resource- and operation-level scopes prevent.
+- [OWASP Access Control Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Access_Control_Cheat_Sheet.html): implementation guidance for scope and permission checks.
+- [RFC 6749: OAuth 2.0 §3.3 Access Token Scope](https://datatracker.ietf.org/doc/html/rfc6749#section-3.3): the scope model this page mirrors for API keys.
+- [CWE-269: Improper Privilege Management](https://cwe.mitre.org/data/definitions/269.html): the weakness that over-privileged keys embody.

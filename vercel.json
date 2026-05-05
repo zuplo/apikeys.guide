@@ -1,0 +1,31 @@
+{
+  "outputDirectory": "dist",
+  "cleanUrls": true,
+  "headers": [
+    {
+      "source": "/",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "</llms.txt>; rel=\"describedby\"; type=\"text/plain\"; title=\"llms.txt\", </llms-full.txt>; rel=\"alternate\"; type=\"text/plain\"; title=\"llms-full.txt\", </index.md>; rel=\"alternate\"; type=\"text/markdown\", </sitemap.xml>; rel=\"sitemap\""
+        }
+      ]
+    },
+    {
+      "source": "/docs/:path*",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "</llms.txt>; rel=\"describedby\"; type=\"text/plain\"; title=\"llms.txt\", </llms-full.txt>; rel=\"alternate\"; type=\"text/plain\"; title=\"llms-full.txt\", </sitemap.xml>; rel=\"sitemap\""
+        }
+      ]
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/docs/introduction/what-are-api-keys",
+      "destination": "/",
+      "permanent": true
+    }
+  ]
+}

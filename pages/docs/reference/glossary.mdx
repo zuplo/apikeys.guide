@@ -1,0 +1,160 @@
+---
+title: "Glossary"
+description: "Definitions for the API key security, authentication, and key management terms used across apikeys.guide."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+toc: true
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+A single page of short, precise definitions for the terms used across this guide: API key, bearer token, JWT, scope, rotation, CSPRNG, KMS, MCP, and the rest. Each entry links to the doc that covers the concept in depth. Use it as a reference when reading the rest of the site, or as a definition source when writing your own documentation.
+
+{/* DefinedTermSet JSON-LD. Each <dt>/<dd> below maps to a DefinedTerm
+    member so LLM crawlers and search engines can parse the glossary as
+    structured data. Keep this block in sync with the visible list. */}
+<script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "DefinedTermSet",
+  "@id": "https://apikeys.guide/docs/reference/glossary#termset",
+  name: "apikeys.guide glossary",
+  description: "Definitions for the API key security, authentication, and key management terms used across apikeys.guide.",
+  inLanguage: "en",
+  url: "https://apikeys.guide/docs/reference/glossary",
+  hasDefinedTerm: [
+    { "@type": "DefinedTerm", name: "API key", description: "A long, randomly generated string that a client includes in API requests so the server can identify the calling application or account.", url: "https://apikeys.guide/" },
+    { "@type": "DefinedTerm", name: "Bearer token", description: "Any opaque credential presented in an Authorization header as 'Bearer <token>'; the server grants access to whoever bears it. API keys, OAuth access tokens, and JWTs can all be used as bearer tokens.", url: "https://apikeys.guide/docs/introduction/how-api-keys-work" },
+    { "@type": "DefinedTerm", name: "JWT", description: "A JSON Web Token (RFC 7519): a signed, self-describing token whose payload the server can verify without a database lookup. Often used instead of or alongside API keys for stateless authentication.", url: "https://apikeys.guide/docs/introduction/api-keys-vs-other-auth" },
+    { "@type": "DefinedTerm", name: "OAuth access token", description: "A short-lived credential issued by an OAuth 2.0 authorization server (RFC 6749) representing a delegated grant. Unlike an API key, it is typically scoped, expiring, and bound to a specific user and client.", url: "https://apikeys.guide/docs/introduction/api-keys-vs-other-auth" },
+    { "@type": "DefinedTerm", name: "Refresh token", description: "A long-lived OAuth credential used to obtain new access tokens without re-prompting the user. Never sent to resource servers.", url: "https://apikeys.guide/docs/ai-agents/oauth-vs-api-keys-for-agents" },
+    { "@type": "DefinedTerm", name: "Key prefix", description: "A short, non-secret leading segment of an API key (for example 'sk_live_' or 'zpka_') that identifies the issuer, environment, or key type and enables secret-scanner detection and O(1) database lookup.", url: "https://apikeys.guide/docs/implementation/key-formats-and-prefixes" },
+    { "@type": "DefinedTerm", name: "Checksum suffix", description: "A short error-detection code appended to a key (commonly CRC32 of the preceding bytes) so structural validity can be checked without a database call and so scanners can distinguish real keys from random strings.", url: "https://apikeys.guide/docs/implementation/key-formats-and-prefixes" },
+    { "@type": "DefinedTerm", name: "Key rotation", description: "The practice of replacing an API key with a new one on a schedule or in response to an incident, ideally with an overlap window so consumers can switch over without downtime.", url: "https://apikeys.guide/docs/security/key-rotation" },
+    { "@type": "DefinedTerm", name: "Key revocation", description: "Immediately invalidating a key so it can no longer authenticate requests. Distinct from expiration, which is scheduled.", url: "https://apikeys.guide/docs/security/revocation" },
+    { "@type": "DefinedTerm", name: "Key scope", description: "The set of operations and resources a given API key is permitted to access; a core tool for applying the principle of least privilege.", url: "https://apikeys.guide/docs/security/scoping-and-permissions" },
+    { "@type": "DefinedTerm", name: "Principle of least privilege", description: "A design principle that grants every credential only the access required for its task, limiting the blast radius if it leaks. Codified in NIST SP 800-53 AC-6.", url: "https://apikeys.guide/docs/security/scoping-and-permissions" },
+    { "@type": "DefinedTerm", name: "Zero trust", description: "An architecture (NIST SP 800-207) in which no request is trusted by default; every access is authenticated, authorised, and continually validated, regardless of network location.", url: "https://apikeys.guide/docs/ai-agents/least-privilege-keys-for-agents" },
+    { "@type": "DefinedTerm", name: "Secret scanning", description: "Automated detection of leaked credentials (API keys, tokens, private keys) in source code, CI logs, container images, and public data. GitHub Secret Scanning is the reference implementation for public repositories.", url: "https://apikeys.guide/docs/security/leak-detection" },
+    { "@type": "DefinedTerm", name: "Leak detection", description: "The discipline of finding API keys that have been exposed (in Git history, logs, paste sites, error responses) and revoking them before they are abused.", url: "https://apikeys.guide/docs/security/leak-detection" },
+    { "@type": "DefinedTerm", name: "CSPRNG", description: "A Cryptographically Secure Pseudo-Random Number Generator. The only acceptable source of entropy for generating API keys, session tokens, and other secrets. See NIST SP 800-90A.", url: "https://apikeys.guide/docs/implementation/key-generation" },
+    { "@type": "DefinedTerm", name: "Entropy", description: "A measure of unpredictability in bits. An API key with 128+ bits of entropy is computationally infeasible to brute-force; anything less is a weak credential.", url: "https://apikeys.guide/docs/implementation/key-generation" },
+    { "@type": "DefinedTerm", name: "SHA-256", description: "A one-way cryptographic hash function (FIPS 180-4) appropriate for storing high-entropy API keys at rest. Fast, deterministic, and collision-resistant; suitable for O(1) lookup when combined with a plaintext prefix.", url: "https://apikeys.guide/docs/security/hashing-and-storage" },
+    { "@type": "DefinedTerm", name: "bcrypt / Argon2", description: "Deliberately slow password-hashing functions designed for low-entropy inputs. Overkill (and a performance anti-pattern) for high-entropy API keys; use SHA-256 for keys and reserve these for passwords.", url: "https://apikeys.guide/docs/security/hashing-and-storage" },
+    { "@type": "DefinedTerm", name: "HMAC", description: "Hash-based Message Authentication Code (RFC 2104). Used to sign API requests so both integrity and authenticity can be verified without transmitting a reusable secret.", url: "https://apikeys.guide/docs/introduction/api-keys-vs-other-auth" },
+    { "@type": "DefinedTerm", name: "Constant-time comparison", description: "A string-equality check whose runtime does not depend on how many leading bytes match, preventing timing side-channel attacks on secret validation (CWE-208).", url: "https://apikeys.guide/docs/implementation/validation-and-lookup" },
+    { "@type": "DefinedTerm", name: "Rate limiting", description: "Enforcing a maximum number of requests per key within a time window to protect capacity, contain abuse, and provide quota primitives for monetisation.", url: "https://apikeys.guide/docs/security/rate-limiting" },
+    { "@type": "DefinedTerm", name: "Throttling", description: "A rate-limit response strategy that slows requests rather than rejecting them outright; often implemented via token-bucket or leaky-bucket algorithms.", url: "https://apikeys.guide/docs/security/rate-limiting" },
+    { "@type": "DefinedTerm", name: "Quota", description: "A per-key or per-consumer usage ceiling, typically measured over a billing period and tied to a monetisation plan.", url: "https://apikeys.guide/docs/operations/api-monetization" },
+    { "@type": "DefinedTerm", name: "API gateway", description: "A request-routing layer that sits between clients and backend services and handles cross-cutting concerns like authentication, rate limiting, and observability. Examples: Zuplo, Kong, Apigee, AWS API Gateway.", url: "https://apikeys.guide/docs/architecture/gateway-based-authentication" },
+    { "@type": "DefinedTerm", name: "Edge authentication", description: "Validating API keys at a globally distributed edge network (points of presence close to the caller) rather than in a central region, for lower latency at the cost of some consistency delay.", url: "https://apikeys.guide/docs/architecture/edge-authentication" },
+    { "@type": "DefinedTerm", name: "KMS", description: "A Key Management Service (AWS KMS, Google Cloud KMS, HashiCorp Vault) that stores and rotates the encryption keys used to protect other secrets at rest.", url: "https://apikeys.guide/docs/security/hashing-and-storage" },
+    { "@type": "DefinedTerm", name: "Secrets manager", description: "A service (AWS Secrets Manager, GCP Secret Manager, Vault, Doppler, Infisical) that stores runtime secrets like API keys and injects them into applications on demand.", url: "https://apikeys.guide/docs/best-practices/for-consumers" },
+    { "@type": "DefinedTerm", name: "MCP", description: "Model Context Protocol: an Anthropic-originated open standard that lets AI assistants connect to external tools and data sources. Each MCP server typically authenticates with API keys or OAuth, making it a high-value target for credential exfiltration.", url: "https://apikeys.guide/docs/ai-agents/designing-mcp-servers-that-protect-secrets" },
+    { "@type": "DefinedTerm", name: "Developer portal", description: "A self-service web surface where API consumers can register, generate keys, view usage, and read docs. Typically bundled with a gateway or API management platform.", url: "https://apikeys.guide/docs/operations/developer-portals" },
+    { "@type": "DefinedTerm", name: "Expiration policy", description: "A rule that causes a key to stop working after a fixed interval from issuance, forcing periodic re-provisioning and limiting the useful lifetime of a leaked credential.", url: "https://apikeys.guide/docs/security/expiration-policies" },
+    { "@type": "DefinedTerm", name: "Canary key", description: "A deliberately planted key with no legitimate use whose appearance in logs or the wild signals a breach of the surrounding system.", url: "https://apikeys.guide/docs/security/leak-detection" },
+    { "@type": "DefinedTerm", name: "Service account", description: "A non-human identity representing an application or workload. Often issued API keys or OAuth client credentials distinct from any human user.", url: "https://apikeys.guide/docs/security/scoping-and-permissions" },
+    { "@type": "DefinedTerm", name: "Basic Auth", description: "HTTP's original 'Basic' authentication scheme (RFC 7617): base64-encoded username:password sent on every request. Obsolete for most public APIs in favour of bearer tokens or keys.", url: "https://apikeys.guide/docs/introduction/api-keys-vs-other-auth" },
+    { "@type": "DefinedTerm", name: "mTLS", description: "Mutual Transport Layer Security: both client and server present certificates. A strong alternative to API keys for service-to-service authentication inside controlled networks.", url: "https://apikeys.guide/docs/introduction/api-keys-vs-other-auth" },
+  ],
+}) }} />
+
+## About this glossary
+
+Each term below is a short definition followed by a link to the doc that explores it in depth. The list is ordered roughly from broad to narrow: authentication concepts first, then key-specific mechanics, then operational terms.
+
+## Authentication and token types
+
+**API key**: A long, randomly generated string that a client includes in API requests so the server can identify the calling application or account. The focus of this entire guide; defined and contrasted with other methods in [What Are API Keys?](/).
+
+**Bearer token**: Any opaque credential presented in an `Authorization` header as `Bearer <token>`; the server grants access to whoever bears it. API keys, OAuth access tokens, and JWTs can all be used as bearer tokens. See [How API Keys Work](/docs/introduction/how-api-keys-work).
+
+**JWT**: A [JSON Web Token (RFC 7519)](https://datatracker.ietf.org/doc/html/rfc7519): a signed, self-describing token whose payload the server can verify without a database lookup. Often used instead of or alongside API keys for stateless authentication. Compared in [API Keys vs Other Auth](/docs/introduction/api-keys-vs-other-auth).
+
+**OAuth access token**: A short-lived credential issued by an [OAuth 2.0 authorization server (RFC 6749)](https://datatracker.ietf.org/doc/html/rfc6749) representing a delegated grant. Scoped, expiring, and bound to a specific user and client.
+
+**Refresh token**: A long-lived OAuth credential used to obtain new access tokens without re-prompting the user. Never sent to resource servers. See [OAuth vs API Keys for Agents](/docs/ai-agents/oauth-vs-api-keys-for-agents).
+
+**Basic Auth**: HTTP's original "Basic" authentication scheme ([RFC 7617](https://datatracker.ietf.org/doc/html/rfc7617)): base64-encoded `username:password` sent on every request. Obsolete for most public APIs.
+
+**mTLS**: Mutual Transport Layer Security: both client and server present certificates. A strong alternative to API keys for service-to-service authentication inside controlled networks.
+
+**HMAC**: [Hash-based Message Authentication Code (RFC 2104)](https://datatracker.ietf.org/doc/html/rfc2104). Used to sign API requests so both integrity and authenticity can be verified without transmitting a reusable secret.
+
+## Key structure and cryptography
+
+**Key prefix**: A short, non-secret leading segment of an API key (for example `sk_live_` or `zpka_`) that identifies the issuer, environment, or key type and enables secret-scanner detection and O(1) database lookup. See [Key Formats & Prefixes](/docs/implementation/key-formats-and-prefixes).
+
+**Checksum suffix**: A short error-detection code appended to a key (commonly CRC32 of the preceding bytes) so structural validity can be checked without a database call. Used by GitHub, Stripe, and Zuplo.
+
+**Entropy**: A measure of unpredictability in bits. An API key with 128+ bits of entropy is computationally infeasible to brute-force; anything less is a weak credential. See [Key Generation](/docs/implementation/key-generation).
+
+**CSPRNG**: A Cryptographically Secure Pseudo-Random Number Generator. The only acceptable source of entropy for generating API keys, session tokens, and other secrets. Specified in [NIST SP 800-90A](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final).
+
+**SHA-256**: A one-way cryptographic hash function ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/final)) appropriate for storing high-entropy API keys at rest. Fast, deterministic, and collision-resistant. See [Hashing & Storage](/docs/security/hashing-and-storage).
+
+**bcrypt / Argon2**: Deliberately slow password-hashing functions designed for low-entropy inputs. Overkill (and a performance anti-pattern) for high-entropy API keys; use SHA-256 for keys and reserve these for passwords.
+
+**Constant-time comparison**: A string-equality check whose runtime does not depend on how many leading bytes match, preventing timing side-channel attacks on secret validation ([CWE-208](https://cwe.mitre.org/data/definitions/208.html)). See [Validation & Lookup](/docs/implementation/validation-and-lookup).
+
+## Lifecycle
+
+**Key rotation**: The practice of replacing an API key with a new one on a schedule or in response to an incident, ideally with an overlap window so consumers can switch over without downtime. See [Key Rotation](/docs/security/key-rotation).
+
+**Key revocation**: Immediately invalidating a key so it can no longer authenticate requests. Distinct from expiration, which is scheduled. See [Revocation](/docs/security/revocation).
+
+**Expiration policy**: A rule that causes a key to stop working after a fixed interval from issuance, forcing periodic re-provisioning and limiting the useful lifetime of a leaked credential. See [Expiration Policies](/docs/security/expiration-policies).
+
+**Canary key**: A deliberately planted key with no legitimate use whose appearance in logs or the wild signals a breach of the surrounding system.
+
+## Authorization and access control
+
+**Key scope**: The set of operations and resources a given API key is permitted to access; a core tool for applying the principle of least privilege. See [Scoping & Permissions](/docs/security/scoping-and-permissions).
+
+**Principle of least privilege**: A design principle that grants every credential only the access required for its task, limiting the blast radius if it leaks. Codified in [NIST SP 800-53 AC-6](https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search).
+
+**Zero trust**: An architecture ([NIST SP 800-207](https://csrc.nist.gov/pubs/sp/800/207/final)) in which no request is trusted by default; every access is authenticated, authorised, and continually validated. See [Least-Privilege Keys for Agents](/docs/ai-agents/least-privilege-keys-for-agents).
+
+**Service account**: A non-human identity representing an application or workload. Often issued API keys or OAuth client credentials distinct from any human user.
+
+## Traffic management and monetisation
+
+**Rate limiting**: Enforcing a maximum number of requests per key within a time window. See [Rate Limiting](/docs/security/rate-limiting).
+
+**Throttling**: A rate-limit response strategy that slows requests rather than rejecting them outright; often implemented via token-bucket or leaky-bucket algorithms.
+
+**Quota**: A per-key or per-consumer usage ceiling, typically measured over a billing period and tied to a monetisation plan. See [API Monetization](/docs/operations/api-monetization).
+
+## Infrastructure
+
+**API gateway**: A request-routing layer that sits between clients and backend services and handles cross-cutting concerns like authentication, rate limiting, and observability. Examples: Zuplo, Kong, Apigee, AWS API Gateway. See [Gateway-Based Authentication](/docs/architecture/gateway-based-authentication).
+
+**Edge authentication**: Validating API keys at a globally distributed edge network rather than in a central region, for lower latency at the cost of some consistency delay. See [Edge Authentication](/docs/architecture/edge-authentication).
+
+**KMS**: A Key Management Service (AWS KMS, Google Cloud KMS, HashiCorp Vault) that stores and rotates the encryption keys used to protect other secrets at rest.
+
+**Secrets manager**: A service (AWS Secrets Manager, GCP Secret Manager, Vault, Doppler, Infisical) that stores runtime secrets like API keys and injects them into applications on demand. See [For API Consumers](/docs/best-practices/for-consumers).
+
+**Developer portal**: A self-service web surface where API consumers can register, generate keys, view usage, and read docs. See [Developer Portals](/docs/operations/developer-portals).
+
+## Discovery and incident response
+
+**Secret scanning**: Automated detection of leaked credentials (API keys, tokens, private keys) in source code, CI logs, container images, and public data. [GitHub Secret Scanning](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning) is the reference implementation for public repositories.
+
+**Leak detection**: The discipline of finding API keys that have been exposed (in Git history, logs, paste sites, error responses) and revoking them before they are abused. See [Leak Detection](/docs/security/leak-detection).
+
+## Agent-era terms
+
+**MCP**: [Model Context Protocol](https://modelcontextprotocol.io), an Anthropic-originated open standard that lets AI assistants connect to external tools and data sources. Each MCP server typically authenticates with API keys or OAuth, making it a high-value target for credential exfiltration. See the entire [AI Agents section](/docs/ai-agents/how-ai-assistants-expose-keys).
+
+## References
+
+- [OWASP API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x00-introduction/)
+- [NIST SP 800-63B: Digital Identity Guidelines](https://pages.nist.gov/800-63-3/sp800-63b.html)
+- [NIST SP 800-57: Key Management](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final)
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final)
+- [RFC 6749: OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749)
+- [RFC 6750: OAuth 2.0 Bearer Token Usage](https://datatracker.ietf.org/doc/html/rfc6750)
+- [RFC 7519: JSON Web Token (JWT)](https://datatracker.ietf.org/doc/html/rfc7519)
+- [GitHub Secret Scanning documentation](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning)
+- [Model Context Protocol specification](https://modelcontextprotocol.io/specification)

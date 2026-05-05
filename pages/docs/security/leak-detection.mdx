@@ -1,0 +1,135 @@
+---
+title: "Leak Detection"
+description: "How to detect leaked API keys using prefixes, secret scanning tools, and automated revocation workflows."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Keys will leak into public repos, CI logs, client bundles, and chat transcripts. Accepting that and instrumenting for it beats hoping it never happens.
+- The single highest-leverage move is a recognizable [key prefix](/docs/implementation/key-formats-and-prefixes). It's what makes automated scanners (GitHub, GitGuardian, TruffleHog) able to find your keys.
+- Register your prefix with [GitHub's secret scanning partner program](https://docs.github.com/en/code-security/secret-scanning/secret-scanning-partner-program) so GitHub webhooks you directly when a key is committed publicly.
+- Build an end-to-end pipeline: detect → verify → revoke → notify → audit. Manual steps turn minutes-to-respond into days-to-respond.
+- Scan your own logs and error-tracking services for your prefix too. Half of real-world leaks are self-inflicted through logging, not third-party commits.
+
+</TLDR>
+
+## Keys Will Leak
+
+No matter how many warnings you put in your documentation, API keys end up in places they shouldn't: public GitHub repos, client-side JavaScript bundles, CI logs, Slack messages, Stack Overflow answers, and Docker images. Accepting that leaks are inevitable, and building systems to detect and respond to them, is more effective than hoping it never happens.
+
+## Key Prefixes Enable Detection
+
+The single most impactful thing you can do for leak detection is give your API keys a [recognizable prefix](/docs/implementation/key-formats-and-prefixes):
+
+```text
+myapi_live_7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c
+```
+
+Prefixes like `sk_live_`, `pk_test_`, or `myapi_` serve two purposes:
+
+1. **Automated scanning tools** can write regex patterns to find your keys in code, logs, and documents.
+2. **Humans** can immediately recognize the key and know which service it belongs to.
+
+Without a prefix, your keys are random strings indistinguishable from any other base64 or hex value. With a prefix, they become detectable.
+
+Choose a prefix format that includes:
+
+- **Service identifier**: `sk` (secret key), `pk` (publishable key), or your service name.
+- **Environment**: `live`, `test`, `staging`.
+- **Separator**: Use underscores for readability.
+
+```text
+{type}_{environment}_{random_value}
+```
+
+## GitHub Secret Scanning
+
+GitHub automatically scans every push to public repositories for known secret formats. If you're an API provider, you can register your key pattern with [GitHub's secret scanning partner program](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning). When GitHub detects a matching token, it sends a webhook to your service so you can automatically revoke or flag the key. Many API platforms ship as GitHub secret-scanning partners so their customers inherit the integration without registering a pattern themselves — Stripe, Slack, AWS, and Zuplo are all on the public partners list, which means leaked keys issued through those platforms are detected and the provider is notified by GitHub directly. [Zuplo documents its partner integration](https://zuplo.com/docs/articles/api-key-leak-detection?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) via its `zpka_` key format, with notifications delivered to customers by email and in-app.
+
+Even if you haven't partnered with GitHub, you can enable secret scanning for your own organization's repositories to catch keys from other providers that your developers may have accidentally committed.
+
+### What GitHub needs from you
+
+- A regex pattern matching your key format.
+- A webhook endpoint that accepts notifications when keys are found.
+- A response indicating whether the key is active, revoked, or unknown.
+
+## Scanning Tools
+
+Several tools scan codebases, commit histories, and infrastructure for leaked secrets:
+
+| Tool | What It Does |
+|---|---|
+| **GitHub Secret Scanning** | Scans public and private repos for partner-registered patterns |
+| **GitGuardian** | Real-time monitoring of GitHub, GitLab, Bitbucket, and CI/CD logs |
+| **truffleHog** | Scans git history for high-entropy strings and known patterns |
+| **gitleaks** | Fast, configurable scanner for git repos, supporting custom rules |
+| **detect-secrets** | Yelp's tool for preventing secrets from entering code in the first place |
+
+For CI/CD pipelines, run a scanner as a pre-commit hook or CI step:
+
+```bash
+# Using gitleaks in a CI pipeline
+gitleaks detect --source . --report-format json --report-path gitleaks-report.json
+
+# Using truffleHog to scan git history
+trufflehog git file://. --only-verified
+```
+
+## Monitoring and Alerting
+
+Beyond scanning repositories, monitor other channels where keys appear:
+
+- **Application logs**: Audit your logging pipeline to ensure keys are redacted. Search existing logs for your key prefix to find historical leaks.
+- **Error tracking services**: Tools like Sentry or Datadog may capture keys in request headers or stack traces.
+- **Public paste sites**: Services like GitGuardian also monitor Pastebin, Gist, and other public paste sites.
+- **npm / PyPI packages**: Keys occasionally ship inside published packages.
+
+Set up alerts so your security team is notified within minutes of detection, not days.
+
+## Automated Revocation
+
+Detection without action is just awareness. Build an automated response pipeline:
+
+1. **Detection**: A scanning tool identifies a leaked key.
+2. **Verification**: Confirm the key is active (call your own validation endpoint).
+3. **[Revocation](/docs/security/revocation)**: Automatically revoke the key or mark it for immediate [rotation](/docs/security/key-rotation).
+4. **Notification**: Alert the key owner via email, Slack, or your developer portal that their key has been revoked due to a detected leak.
+5. **Audit log**: Record the event, including where the key was found and what action was taken.
+
+```json
+{
+  "event": "key_leaked",
+  "key_prefix": "sk_live_7f8a9b",
+  "detected_by": "github_secret_scanning",
+  "source": "https://github.com/user/repo/blob/main/config.js#L12",
+  "action": "revoked",
+  "notified": "owner@example.com",
+  "timestamp": "2026-04-14T10:30:00Z"
+}
+```
+
+For high-security environments, revoke automatically and require the consumer to create a new key. For lower-risk scenarios, you might flag the key and give the owner a short window to rotate before forced revocation.
+
+## Best Practices
+
+- Use a unique, [recognizable prefix](/docs/implementation/key-formats-and-prefixes) for every key you issue.
+- Register your key format with GitHub's secret scanning partner program.
+- Run a secret scanner in CI to catch leaks before code is merged.
+- Redact keys from all application logs and error reports.
+- Automate the detection-to-revocation pipeline so leaked keys are neutralized in minutes, not days.
+- Notify key owners immediately when a leak is detected, with clear instructions for generating a replacement.
+- If you issue keys through a managed API platform (for example Kong Konnect, Tyk Cloud, or Zuplo), check whether it is a GitHub secret-scanning partner before building your own webhook — if it is, leaked keys are detected and reported to you upstream without pattern registration.
+
+## References
+
+- [GitHub: About secret scanning](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning): overview of how GitHub scans pushes and alerts partners.
+- [GitHub: Secret scanning partner program](https://docs.github.com/en/code-security/secret-scanning/secret-scanning-partner-program): registration details for receiving automated leak notifications for your prefix.
+- [GitHub: About push protection](https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection): the complementary feature that blocks pushes containing known secret patterns.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): leaked credentials are the most common path into this risk category.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): prevention and response practices around secret exposure.
+- [CWE-798: Use of Hard-coded Credentials](https://cwe.mitre.org/data/definitions/798.html) and [CWE-532: Insertion of Sensitive Information into Log File](https://cwe.mitre.org/data/definitions/532.html): the two weaknesses that account for most real-world key leaks.

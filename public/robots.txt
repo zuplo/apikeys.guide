@@ -1,0 +1,77 @@
+# Default: humans and standard search crawlers get the HTML build.
+# The .md twins are reserved for AI retrieval agents (explicit Allow below).
+User-agent: *
+# Content Signals (contentsignals.org, draft-romm-aipref-contentsignals):
+# this site exists to be cited, so search and real-time AI answers are
+# welcome; model training requires explicit permission (granted per-agent
+# below for the retrieval crawlers that honor robots.txt).
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+Allow: /
+Disallow: /*.md$
+
+# --- AI retrieval and answer-engine crawlers ---
+# This site exists to be cited; these agents are explicitly welcome to
+# fetch the full markdown variants alongside the HTML.
+
+# OpenAI
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+# Anthropic
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+# Google (Gemini training token; Googlebot uses the default * block and HTML)
+User-agent: Google-Extended
+Allow: /
+
+# Perplexity
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+# Apple Intelligence
+User-agent: Applebot-Extended
+Allow: /
+
+# Amazon, Mistral, DuckDuckGo, Meta
+User-agent: Amazonbot
+Allow: /
+
+User-agent: MistralAI-User
+Allow: /
+
+User-agent: DuckAssistBot
+Allow: /
+
+User-agent: Meta-ExternalAgent
+Allow: /
+
+# Cohere, Common Crawl, AI2
+User-agent: cohere-ai
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: AI2Bot
+Allow: /
+
+Sitemap: https://apikeys.guide/sitemap.xml

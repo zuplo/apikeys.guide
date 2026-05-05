@@ -1,0 +1,182 @@
+---
+title: "Gateway-Based Authentication"
+description: "How API gateways handle key validation and the trade-offs between gateway-managed and in-app API key auth."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+Most of this guide describes API key authentication as something your application handles directly: your code extracts the key, hashes it, queries a database, and enforces policies. That is a valid and well-understood pattern. But it is not the only one.
+
+<TLDR>
+
+- An API gateway moves key validation, rate limiting, and scope enforcement out of every application service and into a single layer in front of them.
+- Three deployment shapes: in-app (the default throughout this guide), centralized gateway (one hop), and sidecar (mesh-style, per-pod proxy).
+- Gateways handle authentication and coarse authorization; your application still owns business-logic authorization ("can *this* user edit *this* record?").
+- The gateway must strip the raw key and forward only the validated consumer identity (via injected headers, signed context, or mTLS), and your backend must verify requests actually came through the gateway.
+- A gateway usually pays off at 3+ services, when you need developer portals and analytics, or when you'd rather not maintain hashing, caching, revocation propagation, and leak detection yourself.
+
+</TLDR>
+
+An API gateway (a reverse proxy that applies cross-cutting concerns like authentication, rate limiting, logging, and request transformation) can sit between your clients and your backend services, handling authentication before a request ever reaches your application code. This page covers how that architecture works, when it makes sense, and when it does not.
+
+## What an API Gateway Does
+
+In the context of API keys, the gateway takes over the validation pipeline described in [How API Keys Work](/docs/introduction/how-api-keys-work):
+
+1. **Extracts** the key from the `Authorization` header (using the [key prefix](/docs/implementation/key-formats-and-prefixes) to identify key type and route to the correct backend if needed)
+2. **Validates** the key against its own data store (hashed lookup, status check)
+3. **Attaches identity** (the consumer record, scopes, metadata, and rate-limit tier) to the request
+4. **Enforces policies**: rate limits, scope restrictions, IP allowlists
+5. **Forwards** the request to your backend, typically with the consumer identity injected as headers or a verified context object
+
+The gateway authenticates the request before your application sees it. Your application can trust the identity the gateway attaches and focus on business logic.
+
+## Where Authentication Happens
+
+There are three common patterns for where API key validation runs. Each has different implications for latency, security, and operational complexity.
+
+### In-Application Authentication
+
+The application itself handles key validation, typically through middleware.
+
+```text
+Client → Load Balancer → Application (auth + business logic)
+```
+
+- The approach described throughout most of this guide
+- Every service that accepts API keys needs its own validation middleware
+- Key storage, caching, and revocation propagation are your responsibility
+- Simple to understand and deploy for a single service
+- Becomes harder to keep consistent across multiple services
+
+### Gateway Authentication
+
+A dedicated gateway service handles all key validation before forwarding to backend services.
+
+```text
+Client → API Gateway (auth, rate limiting) → Application (business logic)
+```
+
+- Authentication is centralized in one place
+- Backend services receive pre-authenticated requests
+- Adding a new service behind the gateway inherits auth automatically
+- The gateway manages the key data store, caching, and revocation
+- Adds a network hop, though gateways are typically low-latency by design
+
+### Sidecar Authentication
+
+A lightweight proxy runs alongside each service instance, handling auth at the pod or container level. This is common in service-mesh architectures (Envoy, Istio).
+
+```text
+Client → Sidecar (auth) → Application (business logic)
+     (co-located on the same host)
+```
+
+- Decentralized execution but centralized configuration
+- No extra network hop, since the sidecar is on the same host
+- More operational complexity to deploy and manage
+- Well-suited to Kubernetes environments with existing service mesh infrastructure
+
+## What Moves to the Gateway
+
+When you adopt gateway-based authentication, several concerns shift from your application code to the gateway.
+
+**Key validation and storage.** The gateway maintains the hashed key store, handles [O(1) lookups](/docs/implementation/validation-and-lookup), and manages the [caching layer](/docs/implementation/validation-and-lookup#caching-strategies) in front of it. Your services no longer need their own validation middleware.
+
+**Rate limiting.** The gateway enforces [per-key rate limits](/docs/security/rate-limiting) using its own counters, typically backed by a shared data store. Limits are configured declaratively rather than implemented per service.
+
+**Revocation propagation.** When a key is revoked, the gateway handles [cache invalidation and propagation](/docs/security/revocation) across all nodes, replacing the pub/sub or short-TTL cache strategies you would build yourself.
+
+**Consistent error responses.** All authentication failures return the same error format regardless of which backend service the request was targeting. This is achievable with a shared middleware library too, but a gateway enforces it structurally, so no service can accidentally diverge. This matters for preventing [key enumeration](/docs/implementation/validation-and-lookup#important-consistent-error-messages).
+
+**Logging and analytics.** The gateway logs every authentication event (successes, failures, rate-limit hits) in a central location, simplifying the [monitoring and alerting](/docs/operations/logging-and-monitoring) that you would otherwise instrument per service.
+
+## What the Gateway Does Not Do
+
+A gateway handles authentication (is this key valid?) and basic authorization (does this key have the right scopes?). It typically does not handle:
+
+- **Business-logic authorization.** "Can this user edit *this specific document*?" requires application context that the gateway does not have. The gateway can confirm the key has `documents:write` [scope](/docs/security/scoping-and-permissions), but your application must check ownership and access rules.
+- **Complex data validation.** Request body validation, schema enforcement, and business rule checks remain in your application.
+- **Service-to-service auth behind the gateway.** If your backend services call each other, those internal calls may need their own authentication mechanism (mTLS, JWTs, or service mesh identity). The API key validated at the gateway typically does not propagate to internal hops.
+
+## How Identity Flows Through
+
+After the gateway validates a key, it needs to pass the consumer identity to your backend. The critical security constraint here: if your backend is directly reachable (not just through the gateway), an attacker could forge the identity headers. Your backend must verify that requests actually came through the gateway. Common mitigations include network-level restrictions (firewall rules, private subnets) and shared-secret validation on forwarded requests.
+
+With that constraint in mind, the common patterns are:
+
+**Injected headers.** The gateway adds headers like `X-Consumer-Id`, `X-Consumer-Scopes`, or `X-Consumer-Plan` to the forwarded request. Your backend reads these instead of parsing tokens.
+
+```http
+# Headers your backend receives after gateway auth
+X-Consumer-Id: cust_8f3a2b
+X-Consumer-Scopes: products:read,orders:write
+X-Consumer-Plan: pro
+X-RateLimit-Remaining: 142
+```
+
+**Signed context.** The gateway issues an internal JWT or HMAC-signed payload containing the consumer identity, which backend services verify with a shared secret. This is the strongest option when your backend is not fully network-isolated from the outside.
+
+**Mutual TLS.** The gateway terminates the client's connection and opens a new mTLS-secured connection to your backend. mTLS authenticates the gateway itself as a trusted caller, but consumer identity is still passed via headers or a signed payload over that secure channel. The value of mTLS here is that your backend can reject any connection that does not come from the gateway, making header forgery impossible.
+
+## When a Gateway Makes Sense
+
+A gateway is not automatically the right choice. It adds operational complexity and a dependency. Here is when the trade-off tends to pay off:
+
+**Multiple backend services.** If you have more than one or two services that accept API keys, a gateway eliminates the need to implement and maintain [consistent validation middleware](/docs/implementation/validation-and-lookup) in each one. The more services you have, the stronger the case.
+
+**You need rate limiting, logging, and auth in one place.** If you are building rate limiting, request logging, and authentication as separate concerns anyway, a gateway consolidates them. Building these independently for each service is duplicated effort.
+
+**You want to offer a developer-facing API.** If external developers will consume your API, a gateway provides the infrastructure for key management, usage analytics, and developer portals, concerns that go beyond authentication. Gateways including Kong, Tyk, Gravitee, and Zuplo all ship (or integrate with) a developer portal so consumers can create and manage their own API keys without you building a separate UI. Zuplo's [self-serve key management](https://zuplo.com/docs/articles/api-key-management?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) lets end users generate, view, roll, and revoke their own keys from the portal without a support ticket.
+
+**You would rather not build the auth pipeline yourself.** A robust key validation system involves [hashing](/docs/security/hashing-and-storage), [caching](/docs/implementation/validation-and-lookup#caching-strategies), [rotation support](/docs/security/key-rotation), [revocation propagation](/docs/security/revocation), and [leak detection](/docs/security/leak-detection). That is a meaningful engineering investment to build and an ongoing maintenance commitment. A gateway is one way to offload it, though you should weigh the operational cost of running (or paying for) the gateway against the cost of the middleware.
+
+## When a Gateway Is Unnecessary
+
+**Single service, simple auth.** If you have one API with straightforward key validation, adding a gateway introduces operational overhead that outweighs its benefits. The [validation middleware pattern](/docs/implementation/validation-and-lookup#validation-middleware) described elsewhere in this guide is simpler and sufficient.
+
+**Internal-only APIs.** If your API is consumed exclusively by internal services in a trusted network, the gateway's auth features may be redundant, especially if you already have a service mesh handling identity. Teams that add a gateway in this scenario often spend more time configuring gateway policies than they would have spent writing the middleware directly.
+
+**Latency-sensitive paths.** A centralized gateway adds a network hop to every request. For most APIs the added latency is negligible (single-digit milliseconds), but for latency-critical paths (real-time bidding, game servers, high-frequency trading), even small additions matter. Measure before committing.
+
+**Cost at high volume.** Managed gateways typically charge per request or per million requests. At high throughput this becomes a real line item. If your API handles hundreds of millions of requests per month, compare the managed gateway cost against the engineering cost of maintaining in-app middleware.
+
+**You need deep application-context auth.** If every authorization decision requires data that only your application has (user roles, resource ownership, tenant context), a gateway can only do the first layer. You will still write auth logic in your application, and the gateway becomes a thin pass-through that adds latency without removing much work.
+
+**You already have a service mesh.** If your infrastructure runs Istio, Linkerd, or a similar service mesh, consider the sidecar pattern instead of a centralized gateway. The mesh already handles mTLS, identity propagation, and policy enforcement at the pod level, so adding a separate gateway may duplicate functionality.
+
+## Common API Gateways
+
+A range of tools can serve as an API gateway for key management. They vary in architecture, deployment model, and how much of the key lifecycle they handle:
+
+| Category | Examples | Trade-offs |
+| --- | --- | --- |
+| Managed platforms | Zuplo, Apigee, AWS API Gateway | No infrastructure to run; less control over deployment and data residency. Feature depth varies across platforms — built-in API key management, developer portals, and monetization are first-class on some (for example Zuplo) and add-on configurations on others. |
+| Self-hosted proxies | Gravitee, Kong, Tyk | Full control over data and deployment; more operational burden |
+| Lightweight proxies | Envoy, NGINX + auth modules | Flexible and minimal; not a full API management platform |
+| Cloud-native | Azure API Management, Google Cloud API Gateway | Deep cloud integration; tighter vendor coupling |
+
+The choice depends on your team's operational capacity, latency requirements, data residency needs, and whether you want API management features (developer portals, analytics, monetization) beyond basic auth.
+
+## Combining Gateway and Application Auth
+
+In practice, many architectures use both. The gateway handles the first layer (key validation, rate limiting, scope enforcement) and the application handles the second layer (business-logic authorization, resource-level access control).
+
+This layered approach means:
+
+- The gateway rejects invalid, revoked, and rate-limited requests before they consume backend resources
+- Your application trusts the gateway's identity injection and focuses on "is this consumer allowed to do *this specific thing*?"
+- Auth failures at the gateway level are fast and cheap; auth failures at the application level are more expensive but more context-aware
+
+This layered approach is common in production API platforms. The gateway provides a security perimeter and operational baseline; the application provides business context.
+
+## References
+
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): the policy-enforcement-point model that centralized gateways implement in practice.
+- [OWASP API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x00-introduction/): the risk categories a gateway is well-positioned to enforce controls against (authentication, rate limiting, access control).
+- [OWASP API Security Top 10, API8:2023 Security Misconfiguration](https://owasp.org/API-Security/editions/2023/en/0xa8-security-misconfiguration/): the category that "inconsistent auth across services" falls into.
+- [NIST SP 800-204 Series: Security Strategies for Microservices](https://csrc.nist.gov/publications/detail/sp/800-204/final): architectural reference for where authentication and authorization should live in microservice systems.
+- [OWASP REST Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html): baseline controls that a gateway can enforce in one place instead of per service.
+- [Google Cloud: What is an API gateway?](https://cloud.google.com/api-gateway/docs/about-api-gateway): a vendor-neutral explanation of the gateway pattern at the scale most teams encounter.

@@ -1,0 +1,132 @@
+---
+title: "Key Formats & Prefixes"
+description: "Why API key prefixes and structured formats matter for identification, leak detection, routing, and developer experience."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- A prefix turns an opaque random string into a credential you (and secret scanners) can identify at a glance: service, environment, key type.
+- Stripe's `sk_live_` / `pk_test_` convention is the de facto industry standard and is widely supported by GitHub's secret scanning partner program.
+- Use underscores as separators. They preserve double-click selection in terminals and editors, which hyphens and periods do not.
+- A short checksum suffix (CRC32 or HMAC) lets you reject malformed keys without a database call and makes structural detection in leaked strings reliable.
+- Registering your prefix with [GitHub's secret scanning partner program](https://docs.github.com/en/code-security/secret-scanning/secret-scanning-partner-program) is one of the highest-leverage security actions you can take after launch.
+
+</TLDR>
+
+## The Case for Prefixes
+
+A raw Base64 string is a perfectly valid API key, but it tells you nothing at a glance. You cannot determine which service issued it, whether it is a live or test credential, or whether it is a public or secret key. Prefixes solve this by embedding lightweight metadata directly in the key string.
+
+Prefixes serve three critical functions:
+
+1. **Identification:** Developers and support engineers can immediately recognize what a key is for.
+2. **[Leak detection](/docs/security/leak-detection):** Secret scanners (GitHub, GitGuardian, TruffleHog) use prefix patterns to detect exposed credentials in code, logs, and commits.
+3. **Routing:** API gateways and middleware can route requests to the correct authentication backend based on the prefix alone, before performing any cryptographic verification.
+
+## Common Prefix Patterns
+
+The convention popularized by Stripe has become a de facto standard across the industry:
+
+```text
+sk_live_<key>
+sk_test_<key>
+pk_live_<key>
+pk_test_<key>
+```
+
+The structure breaks down as:
+
+| Segment | Meaning |
+|---------|---------|
+| `sk` / `pk` | Secret key vs. publishable key |
+| `live` / `test` | Production vs. sandbox environment |
+| The remainder | The actual random secret |
+
+Other well-known examples:
+
+- **AWS:** `AKIA` prefix for access key IDs
+- **GitHub:** `ghp_` (personal access tokens), `ghs_` (server-to-server), `ghu_` (user-to-server)
+- **Slack:** `xoxb-` (bot tokens), `xoxp-` (user tokens)
+- **OpenAI:** `sk-` prefix for API keys
+- **Zuplo:** `zpka_` prefix with a [checksum suffix](https://zuplo.com/docs/articles/api-key-management?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) for structural validation without a database call
+
+## Separator Conventions
+
+The underscore (`_`) is the most common separator between prefix segments. It works well because:
+
+- It is a valid character in HTTP headers, query parameters, and environment variable values
+- It is visually distinct and easy to parse both by humans and by code
+- Although underscore is a valid Base64url character, the prefix is parsed by known prefix structure rather than delimiter splitting, so the overlap is manageable in practice
+
+Some implementations use hyphens (`-`) or periods (`.`), but underscores have the strongest ecosystem support for pattern matching and secret scanning rules. Underscores also have a practical developer experience advantage: in most text editors, terminals, and browsers, double-clicking a string that uses underscores selects the entire string, while hyphens and periods break word boundaries and force manual selection. For a credential that developers will copy and paste frequently, this small detail reduces friction.
+
+## Designing Your Prefix
+
+A good prefix scheme follows these principles:
+
+- **Short but descriptive.** Two to four characters for the service/type identifier is enough. `sk_`, `api_`, `myco_` all work.
+- **Include the environment** when you have distinct live and test modes. This prevents accidental production calls from test code.
+- **Distinguish key types** if you issue keys with different permission levels (e.g., read-only vs. read-write, publishable vs. secret).
+- **Use a consistent separator.** Pick underscore or hyphen and stick with it.
+
+```text
+{service}_{type}_{environment}_{random_secret}
+
+Example: myco_sk_live_a8Kx92mNpQ7rT3vB...
+```
+
+## Checksums in Keys
+
+Some implementations append a short checksum to the random portion of the key. This allows fast client-side validation without a network round-trip:
+
+```javascript
+import { createHash } from "node:crypto";
+
+function generateKeyWithChecksum(prefix, randomBytes) {
+  const encoded = randomBytes.toString("base64url");
+  const checksum = createHash("sha256")
+    .update(encoded)
+    .digest("base64url")
+    .slice(0, 6);
+  return `${prefix}${encoded}_${checksum}`;
+}
+```
+
+A checksum lets your validation middleware reject obviously malformed keys (typos, truncation, corruption) before hitting the database. It does not replace server-side authentication; it is a lightweight pre-filter.
+
+GitHub's token format uses a CRC32 checksum suffix, allowing their secret scanning infrastructure to verify whether a detected string is structurally valid before raising an alert. Stripe (`sk_live_`), GitHub (`ghp_`, `gho_`), and Zuplo (`zpka_`) all follow the same prefix-plus-checksum principle, which lets validation layers reject malformed keys without a database lookup and lets secret scanners filter out false positives before raising alerts. Zuplo keys follow a [`zpka_<random>_<checksum>` structure](https://zuplo.com/docs/articles/api-key-leak-detection?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) that makes Zuplo a GitHub secret scanning partner: the prefix and checksum let GitHub's scanner detect real Zuplo keys in any repository and notify Zuplo, which alerts the key's owner.
+
+For higher assurance, you can sign the key payload with a server-side secret using an HMAC, similar in principle to how JWTs work. This lets your validation layer verify that a key was actually issued by your system, rejecting forged keys without any database call or network round-trip. The trade-off is additional complexity: you need to manage and rotate a signing secret, and the key becomes longer. This is worth considering if your API receives a high volume of requests with invalid keys, but for most services a basic checksum is sufficient.
+
+## Emerging Standards
+
+As API key usage has grown, there has been movement toward more formalized approaches:
+
+- **Bearer token type prefixes** are being adopted more broadly, following the pattern established by GitHub and Stripe.
+- **Secret scanning partnerships** between providers and platforms like GitHub mean that well-prefixed keys can be [automatically revoked](/docs/security/revocation) when leaked in public repositories.
+- **The TypeID specification** combines a type prefix with a UUIDv7 in a Base32-encoded format (`user_2x4y6z8a0b1c2d3e4f5g6h7j8k`), designed for sortable, type-safe identifiers.
+
+If you are building a new API today, adopting a clear prefix scheme is one of the highest-leverage decisions you can make. It costs almost nothing to implement and pays dividends across security tooling, developer experience, and operational debugging for the lifetime of your API.
+
+## Key Format Checklist
+
+- [ ] Prefix identifies the issuing service
+- [ ] Key type (secret vs. public) is indicated
+- [ ] Environment (live vs. test) is distinguishable
+- [ ] Separator is consistent (underscore recommended)
+- [ ] Random portion has [at least 128 bits of entropy](/docs/implementation/key-generation)
+- [ ] Optional checksum enables fast structural validation
+- [ ] Prefix is registered with secret scanning platforms
+
+## References
+
+- [GitHub: Secret scanning partner program](https://docs.github.com/en/code-security/secret-scanning/secret-scanning-partner-program): the registration program this page refers to.
+- [GitHub Engineering Blog: Behind GitHub's new authentication token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/): origin and rationale for the `ghp_`, `ghs_`, `gho_` format family.
+- [Stripe API: API keys](https://docs.stripe.com/keys): reference documentation for the `sk_live_` / `pk_test_` convention the industry has converged on.
+- [RFC 4648: The Base16, Base32, and Base64 Data Encodings](https://datatracker.ietf.org/doc/html/rfc4648): the formal definition for the base64url encoding recommended for the random portion of a key.
+- [Google Cloud: API keys best practices](https://cloud.google.com/docs/authentication/api-keys-best-practices): a provider's guide to identifying, restricting, and rotating keys, which relies on the prefix conventions described here.
+- [OWASP Authentication Cheat Sheet: Token-based authentication](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html): general requirements for bearer credentials including length and identifiability.

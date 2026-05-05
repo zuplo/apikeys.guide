@@ -1,0 +1,124 @@
+---
+title: "Edge Authentication"
+description: "How edge-based API key validation works, its consistency trade-offs, and when it is worth the complexity."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+Traditional API key validation happens at the origin: the server or cluster that runs your application. The request travels from the client to your data center, your code validates the key, and the response travels back. This works, but it means every request, including requests with invalid, expired, or revoked keys, reaches your backend before being rejected.
+
+<TLDR>
+
+- Edge authentication moves the key-validation step to globally distributed points of presence, rejecting invalid requests close to the caller.
+- Biggest wins: lower latency for rejections, reduced origin load under credential-stuffing attacks, global auth without globally-deployed backends.
+- Biggest trade-off: eventual consistency. A revoked key can remain valid at some edge nodes for the length of the propagation window (typically 1–10 seconds).
+- Edge auth is a substitute for, not an addition to, your in-app cache. If your origin already caches key lookups with a 60s TTL, edge propagation at 2–5s is an improvement.
+- Most teams consume this through a managed platform (Cloudflare, Fastly, Zuplo) rather than building their own global replicated key store.
+
+</TLDR>
+
+Edge authentication moves the validation step to the network edge: points of presence (PoPs) geographically distributed near your callers. A request from Tokyo is validated at a PoP in Tokyo, not at your origin in Virginia. Invalid requests are rejected close to the caller without consuming backend resources.
+
+## How It Works
+
+An edge authentication system has three components:
+
+**A distributed key store.** Key records (hashes, scopes, metadata, status) are replicated to edge nodes around the world. When a key is created or updated at the origin, the change propagates to all edge nodes, typically within seconds.
+
+**Edge validation logic.** Each edge node runs the same [validation pipeline](/docs/implementation/validation-and-lookup) against its local key store, including [rate limit](/docs/security/rate-limiting) enforcement. This runs on the edge node closest to the caller.
+
+**A propagation mechanism.** Changes to key state (creation, revocation, scope updates, metadata changes) need to reach all edge nodes. This is typically done through a push-based replication system, where the central key store publishes changes and edge nodes subscribe to the update stream.
+
+```text
+Client (Tokyo)
+  → Edge PoP (Tokyo) — validates key locally, rejects if invalid
+  → Origin (Virginia) — only receives authenticated requests
+```
+
+## What Changes with Edge Validation
+
+**Lower latency for rejections.** An invalid key is rejected at the nearest edge node rather than traveling to your origin first. For APIs with a high proportion of invalid requests (brute-force attempts, expired keys, misconfigured clients), this reduces response times for those rejections.
+
+**Reduced origin load.** Requests rejected at the edge never reach your backend. During a credential-stuffing attack, the edge absorbs the load. This matters less for APIs with low invalid-request rates.
+
+**Geographic distribution without origin replication.** The edge handles auth and rate limiting; only valid requests travel to the origin. This lets you serve a global audience without deploying your backend in multiple regions, though your valid-request latency is still determined by origin location.
+
+## The Consistency Trade-off
+
+Edge authentication introduces an inherent tension between performance and consistency. Key state (active, revoked, scopes) lives at the origin and is replicated to the edge. During the replication window, edge nodes may have stale data.
+
+### The Revocation Window
+
+The most important consistency concern is revocation. When you [revoke a key](/docs/security/revocation), the revocation is recorded at the origin immediately. But edge nodes continue to accept the key until the revocation propagates to them.
+
+This window is typically measured in seconds; most managed edge platforms replicate changes in under 5 seconds. Cloudflare API Gateway, Fastly Compute, AWS Lambda@Edge, and Zuplo each expose a configurable cache TTL on edge-validated credentials, trading a bounded staleness window for low-latency validation. On Zuplo the [edge key cache TTL](https://zuplo.com/docs/policies/api-key-inbound?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) defaults to 60 seconds and is configured per-route on the API Key Authentication policy, so a revoked key can still authenticate at some edge locations until the configured TTL elapses. Seconds matter in a security incident. If a key is leaked and you revoke it, the key may still be valid at some edge nodes for a few seconds.
+
+The practical question is whether the edge propagation delay is shorter than the caching TTL you already have. If your in-app system uses a [caching layer with a 60-second TTL](/docs/implementation/validation-and-lookup#caching-strategies), a 2-5 second edge propagation window is an improvement, not a regression.
+
+### Scope and Metadata Updates
+
+Changes to key scopes, rate-limit tiers, or consumer metadata follow the same propagation model. If you change a key's scopes at the origin, edge nodes enforce the old scopes until the update propagates. This is rarely a problem for planned changes (you can wait a few seconds), but it matters if you are using scope changes as a security response (e.g., downgrading a compromised key's permissions instead of revoking it).
+
+### Consistency Models
+
+Two common consistency models for edge key stores are:
+
+**Eventual consistency with short propagation.** Changes propagate to all nodes within a bounded window (typically 1-10 seconds). The vast majority of requests see current data. This is the model used by most managed edge platforms and is appropriate for nearly all API key use cases.
+
+**Read-through on miss.** If the edge node does not have a record for a key hash, it queries the origin in real time before rejecting. This prevents false rejections for newly created keys that have not propagated yet, at the cost of one origin round-trip for the first request with a new key.
+
+Some systems combine both: eventual consistency for updates to existing keys, read-through for unknown keys.
+
+## When Edge Auth Makes Sense
+
+**Your API serves a geographically distributed audience.** If your callers are spread across continents, edge validation means every caller gets low-latency auth regardless of where your origin is deployed. An API consumed by developers in Europe, Asia, and the Americas benefits more than an API consumed exclusively by services in a single cloud region.
+
+**You handle a high volume of invalid requests.** If your API is a target for credential stuffing, brute-force key guessing, or simply has many callers with misconfigured or expired keys, edge rejection prevents this traffic from reaching your backend. The savings in compute and bandwidth can be significant.
+
+**You are already using a managed edge platform.** If your API traffic already routes through a CDN or edge network (Cloudflare, Fastly, AWS CloudFront), adding key validation at the edge is an incremental step, not a new architectural layer. The infrastructure for global distribution already exists.
+
+**You want to separate auth from application deployment.** Edge auth means your application does not need to be globally deployed to serve a global audience with low-latency authentication. You can run your backend in a single region while the edge handles auth worldwide.
+
+## When Edge Auth Is Unnecessary
+
+**Your API and its callers are in the same region.** If your API runs in `us-east-1` and all callers are also in AWS US East, edge validation adds complexity without meaningful latency improvement. The network distance between caller and origin is already short.
+
+**You have a small number of callers.** Edge auth is designed for scale: many callers, many keys, high request volume. If your API has a handful of trusted callers with known keys, the engineering and operational cost of edge infrastructure is not justified.
+
+**Revocation speed is critical to your security model.** If your threat model requires that revoked keys be rejected within milliseconds (not seconds), edge auth's propagation window may not be fast enough. In this case, real-time origin validation with no caching is the safer choice, though it comes with its own latency trade-offs.
+
+**You need strong consistency for scope changes.** If your authorization model depends on scope changes taking effect immediately (e.g., a compliance system that must downgrade permissions in real time), eventual consistency at the edge may not be acceptable. Evaluate whether your scope-change frequency and urgency justify the complexity of synchronous edge updates.
+
+## Edge Auth in Practice
+
+Most teams do not build edge authentication from scratch. The operational complexity of running a global network of edge nodes with replicated key stores, health monitoring, and propagation guarantees is substantial.
+
+In practice, edge auth is typically provided by:
+
+- **Managed API gateways** that validate at the edge natively (Zuplo, Cloudflare API Gateway, Fastly). These platforms run validation and rate limiting on a global network without you operating the infrastructure. Zuplo's [edge API key authentication](https://zuplo.com/docs/articles/api-key-management?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) runs across more than 300 data centers, with revocation propagating globally within the configured cache TTL.
+- **CDN-based auth** where you run validation logic at the CDN edge using compute platforms like Cloudflare Workers, AWS Lambda@Edge, or Fastly Compute. Note that AWS API Gateway's "edge-optimized" endpoints use CloudFront for routing but still validate keys in-region. To get true edge validation on AWS, you would use Lambda@Edge.
+- **Custom edge deployments** using lightweight proxies (Envoy, NGINX) deployed to multiple regions with a replicated key store
+
+The [build vs. buy](/docs/architecture/build-vs-buy) analysis applies here with even more weight. Building a global edge auth layer requires operating infrastructure in dozens of regions, managing replication lag, and monitoring propagation health. This is significantly more complex than a single-region validation middleware. Most teams that adopt edge auth start with a managed solution unless they have specific infrastructure requirements that prevent it.
+
+## Combining Edge and Origin Auth
+
+A common pattern is to layer edge and origin authentication:
+
+1. **Edge layer** validates the key, enforces rate limits, and injects consumer identity headers
+2. **Origin layer** trusts the edge identity and performs business-logic authorization (resource ownership, tenant isolation, fine-grained permissions)
+
+This is the same [layered pattern](/docs/architecture/gateway-based-authentication#combining-gateway-and-application-auth) described in the gateway architecture page. Edge auth is essentially gateway auth deployed at the network edge rather than in a centralized location.
+
+The same security requirement applies: your origin must verify that requests came through the edge. Network-level isolation (private subnets, firewall rules) or signed identity headers prevent attackers from bypassing the edge and hitting your origin directly.
+
+## References
+
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): policy enforcement points at the network edge are a canonical zero-trust primitive.
+- [OWASP API Security Top 10 (2023), API4:2023 Unrestricted Resource Consumption](https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/): the risk that edge rejection of invalid traffic directly mitigates.
+- [OWASP API Security Top 10, API8:2023 Security Misconfiguration](https://owasp.org/API-Security/editions/2023/en/0xa8-security-misconfiguration/): consistency hazards when edge and origin policies drift.
+- [Cloudflare: Understanding the CAP theorem and edge](https://www.cloudflare.com/learning/ddos/glossary/cap-theorem/): background on the consistency vs. availability trade-off that shapes edge key stores.
+- [Google Cloud: API Gateway and regional endpoints](https://cloud.google.com/api-gateway/docs/about-api-gateway): reference for the regional vs. edge-optimized distinction this page calls out.
+- [CWE-613: Insufficient Session Expiration](https://cwe.mitre.org/data/definitions/613.html): the weakness that "stale revoked key still valid at edge" maps to if propagation is unbounded.

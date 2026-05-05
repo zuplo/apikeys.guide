@@ -1,0 +1,233 @@
+---
+title: "Hashing & Storage"
+description: "Why you should never store API keys in plaintext, and how to hash, salt, and look up keys securely."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Never store API keys in plaintext. A database breach should expose only irreversible hashes, not working credentials.
+- Decide up front: irretrievable (hash-only, shown once, Stripe/AWS model) or retrievable (encrypted at rest, decryptable on demand, Twilio model). Each has real trade-offs.
+- For irretrievable keys, hash with SHA-256: fast, deterministic, FIPS 180-4 standardized. bcrypt and Argon2 are a performance anti-pattern for high-entropy secrets; reserve them for passwords.
+- For retrievable keys, encrypt with AES-256-GCM and manage the key-encryption key through a KMS; still store a SHA-256 alongside for fast request validation.
+- Use constant-time comparison when checking hashes; store a plaintext prefix for O(1) lookup; consider a per-key salt for defense in depth.
+
+</TLDR>
+
+## Never Store Keys in Plaintext
+
+If an attacker gains read access to your database (through a SQL injection, a backup leak, or a compromised admin account), every plaintext API key is immediately usable. Hashing keys before storage means a breach exposes only irreversible hashes, not working credentials.
+
+This is the same principle behind password storage, but API keys have properties that make the implementation simpler.
+
+## Retrievable vs. Irretrievable Keys
+
+Before choosing a storage strategy, you need to make a fundamental design decision: should consumers be able to retrieve their full API key from your dashboard after initial creation, or should the key be displayed exactly once and never shown again?
+
+**Irretrievable keys** are shown once at creation and never stored in a reversible form. Your database contains only a one-way hash. If a consumer loses their key, they must generate a new one. This is the approach used by Stripe, AWS, and GitHub for sensitive credentials.
+
+**Retrievable keys** can be accessed from the dashboard at any time. The key is stored using reversible encryption so it can be decrypted and displayed on demand. This is the approach used by Twilio and RapidAPI.
+
+The instinct is that irretrievable is always more secure, but the trade-off is more nuanced than it appears:
+
+- Irretrievable keys force consumers to copy the key immediately. Disciplined users will store it in an encrypted vault. Less disciplined users will paste it into a text file, email it to themselves, or drop it in a Slack message, all of which are far less secure than your dashboard.
+- Retrievable keys remove the urgency to copy the key somewhere unsafe. The consumer knows they can return to the dashboard, so they are less likely to store the key in an insecure location.
+
+**Choose irretrievable** when your API grants access to highly sensitive operations (payments, infrastructure, PII) and your consumers are engineering teams with access to secrets management tooling.
+
+**Choose retrievable** when your API serves a broader developer audience (hobbyists, small teams, or use cases where the sensitivity is lower) and the risk of insecure key storage by consumers outweighs the risk of your encrypted database being compromised.
+
+Both approaches require that the key is never stored in plaintext. The difference is whether you use a one-way hash (irretrievable) or reversible encryption (retrievable). The rest of this page covers both strategies.
+
+## Why SHA-256 Is the Right Choice
+
+Passwords are low-entropy secrets. Users pick short, predictable strings, so you need intentionally slow hash functions like bcrypt or Argon2 to resist brute-force attacks. API keys are different: a [properly generated key](/docs/implementation/key-generation) has 128+ bits of entropy. No attacker is brute-forcing a random 32-byte string, regardless of how fast the hash function is.
+
+SHA-256 is:
+
+- **Fast**: you can validate thousands of requests per second without the CPU overhead of bcrypt.
+- **Deterministic**: the same input always produces the same output, which makes lookup straightforward.
+- **Widely available**: every language and platform includes a SHA-256 implementation.
+
+| Property | Passwords | API Keys |
+|---|---|---|
+| Entropy | Low (user-chosen) | High (randomly generated) |
+| Recommended hash | bcrypt / Argon2 | SHA-256 |
+| Needs slow hashing | Yes | No |
+| Needs salting | Yes (critical) | Optional (defense in depth) |
+
+## Hashing a Key
+
+### Node.js
+
+```javascript
+import { createHash } from "node:crypto";
+
+function hashApiKey(key) {
+  return createHash("sha256").update(key).digest("hex");
+}
+
+// Store the result in your database
+const hashed = hashApiKey("myapi_live_abc123def456ghi789");
+// => "b2f8e1c0d3a4..."
+```
+
+### Python
+
+```python
+import hashlib
+
+def hash_api_key(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+hashed = hash_api_key("myapi_live_abc123def456ghi789")
+```
+
+### Go
+
+```go
+package main
+
+import (
+    "crypto/sha256"
+    "encoding/hex"
+)
+
+func hashAPIKey(key string) string {
+    h := sha256.Sum256([]byte(key))
+    return hex.EncodeToString(h[:])
+}
+```
+
+## Using Key Prefixes for Lookup
+
+Hashing creates a problem: if a user sends `myapi_live_abc123...` in an API request, you need to find the matching row in your database. You can't search by the original key because you didn't store it.
+
+The solution is to store a **short, non-secret [prefix](/docs/implementation/key-formats-and-prefixes)** alongside the hash. When generating a key, split it into two parts:
+
+```text
+myapi_live_abc123def456ghi789jkl012mno345
+|----------||------||-----------------------------|
+prefix      lookup   secret portion
+            portion
+```
+
+Store the prefix and lookup portion in plaintext (e.g., `myapi_live_abc123`) and the full key's SHA-256 hash next to it. On each request:
+
+1. Extract the prefix from the incoming key.
+2. Query your database: `SELECT * FROM api_keys WHERE prefix = 'myapi_live_abc123'`.
+3. Hash the full incoming key and compare it to the stored hash.
+
+This gives you O(1) lookup without exposing the secret.
+
+```javascript
+import { createHash, timingSafeEqual } from "node:crypto";
+
+function verifyApiKey(incomingKey, storedHash) {
+  const incomingHash = createHash("sha256")
+    .update(incomingKey)
+    .digest();
+
+  const expectedHash = Buffer.from(storedHash, "hex");
+
+  return timingSafeEqual(incomingHash, expectedHash);
+}
+```
+
+Always use a **constant-time comparison** (like `timingSafeEqual`) when comparing hashes. A naive `===` comparison can leak information through timing differences.
+
+## Adding a Salt
+
+While not strictly necessary for high-entropy keys, salting adds defense in depth. A per-key salt ensures that two identical keys (unlikely, but possible across systems) produce different hashes, and it defeats precomputed rainbow tables.
+
+```javascript
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+
+function hashApiKeyWithSalt(key) {
+  const salt = randomBytes(16).toString("hex");
+  const hash = createHash("sha256")
+    .update(salt + key)
+    .digest("hex");
+  return { salt, hash };
+}
+
+function verifyApiKeyWithSalt(incomingKey, storedSalt, storedHash) {
+  const incomingHash = createHash("sha256")
+    .update(storedSalt + incomingKey)
+    .digest("hex");
+
+  return timingSafeEqual(
+    Buffer.from(incomingHash, "hex"),
+    Buffer.from(storedHash, "hex")
+  );
+}
+```
+
+Store the salt in the same row as the hash. It's not a secret; its only job is to make each hash unique.
+
+## Encrypted Storage for Retrievable Keys
+
+If you choose the retrievable model, store keys using authenticated encryption rather than a one-way hash. This allows you to decrypt and display the key when the consumer requests it from your dashboard, while keeping it protected at rest.
+
+Use AES-256-GCM or a comparable authenticated encryption algorithm. Authenticated encryption provides both confidentiality and integrity, preventing tampering as well as disclosure.
+
+### Node.js
+
+```javascript
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+
+const ENCRYPTION_KEY = process.env.API_KEY_ENCRYPTION_KEY; // 32 bytes, from a KMS
+
+function encryptApiKey(apiKey) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    Buffer.from(ENCRYPTION_KEY, "hex"),
+    iv,
+  );
+  const encrypted = Buffer.concat([
+    cipher.update(apiKey, "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return {
+    iv: iv.toString("hex"),
+    encrypted: encrypted.toString("hex"),
+    tag: tag.toString("hex"),
+  };
+}
+
+function decryptApiKey({ iv, encrypted, tag }) {
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    Buffer.from(ENCRYPTION_KEY, "hex"),
+    Buffer.from(iv, "hex"),
+  );
+  decipher.setAuthTag(Buffer.from(tag, "hex"));
+  return (
+    decipher.update(Buffer.from(encrypted, "hex"), undefined, "utf8") +
+    decipher.final("utf8")
+  );
+}
+```
+
+Key management considerations for retrievable keys:
+
+- **Protect the encryption key.** Store it in a key management service (AWS KMS, Google Cloud KMS, HashiCorp Vault), not in your application code or environment variables.
+- **Rotate the encryption key** periodically. Use envelope encryption or key versioning so you can re-encrypt stored keys without invalidating them.
+- **Limit decryption access.** Only the dashboard display path and authorized admin endpoints should trigger decryption. Your validation middleware should still compare against a stored hash for request authentication; decrypt only when the consumer explicitly requests to view the key.
+
+Even with the retrievable model, you should store a SHA-256 hash of the key alongside the encrypted value. Use the hash for O(1) request validation (the fast path), and only decrypt when the consumer needs to see the full key in your UI.
+
+## References
+
+- [FIPS 180-4: Secure Hash Standard (SHS)](https://csrc.nist.gov/pubs/fips/180-4/final): the formal specification for SHA-256, the recommended hash for irretrievable keys.
+- [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final): key-management requirements for the KMS-held encryption key that protects retrievable keys at rest.
+- [NIST SP 800-38D: GCM Mode](https://csrc.nist.gov/publications/detail/sp/800-38d/final): specification for AES-GCM, the authenticated encryption used here for retrievable keys.
+- [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html): the authoritative reference that explains *why* bcrypt/Argon2 are right for passwords and therefore wrong for high-entropy API keys.
+- [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html): algorithm choices for protecting data at rest.
+- [CWE-312: Cleartext Storage of Sensitive Information](https://cwe.mitre.org/data/definitions/312.html) and [CWE-257: Storing Passwords in a Recoverable Format](https://cwe.mitre.org/data/definitions/257.html): the weaknesses directly addressed by hashing and encrypting respectively.
+- [CWE-208: Observable Timing Discrepancy](https://cwe.mitre.org/data/definitions/208.html): the vulnerability addressed by constant-time comparison.

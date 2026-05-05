@@ -1,0 +1,117 @@
+---
+title: "When to Use API Keys"
+description: "A practical guide to deciding when API keys are the right authentication choice, and when you should reach for something else."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- API keys are the right tool when a server-side application needs to identify itself to an API for billing, rate limiting, or usage tracking.
+- They are the wrong tool for user-level authentication, for client-side code (browser, mobile, desktop), or when you need delegated, user-consented scopes.
+- Good fits: server-to-server integrations, public developer APIs, usage metering, internal tooling and scheduled jobs.
+- Bad fits: identifying individual end-users, embedding in client bundles, fine-grained delegated permissions. Use OAuth 2.0 or OIDC instead.
+- "Server calling a server" is the dominant API-key pattern; anything involving a human identity on the other end should reach for a user-auth protocol.
+
+</TLDR>
+
+## The Right Tool for the Job
+
+API keys are one of the most versatile authentication mechanisms available, but they are not appropriate for every scenario. This page provides a practical decision framework to help you determine whether API keys are the right fit for your use case.
+
+## Good Use Cases for API Keys
+
+### Server-to-Server Communication
+
+API keys excel when one backend system calls another. In this model, the key identifies the calling service or organization, and the secret never leaves a controlled server environment. There is no end user in the loop, no browser involved, and the key can be stored securely in environment variables or a secrets manager.
+
+This is the most common and most appropriate use case for API keys. Examples include a payment service calling a fraud-detection API, a backend fetching data from a third-party weather service, or a CI/CD pipeline interacting with a deployment API.
+
+### Public Developer APIs
+
+If you are building an API that external developers will consume, API keys are the standard entry point. They let you identify which developer (or application) is making a request, enforce [per-consumer rate limits](/docs/security/rate-limiting), and track usage for billing or analytics.
+
+Platforms like Stripe, Twilio, SendGrid, and Google Maps all use API keys as the primary mechanism for developer access. The key ties requests to a billing account, making it easy to meter usage and generate invoices.
+
+### Usage Metering and Billing
+
+API keys are a natural fit for usage-based business models. Because every request carries a key that maps to an account, you can count requests, measure resource consumption, and apply tiered pricing, all without complex token introspection or user-session management.
+
+### Internal Tooling and Automation
+
+For internal APIs consumed by scripts, cron jobs, or internal dashboards, API keys offer a low-friction solution. They are easy to issue, easy to [rotate](/docs/security/key-rotation), and avoid the overhead of setting up an OAuth authorization server for an audience of internal services.
+
+## Bad Use Cases for API Keys
+
+### User-Level Authentication
+
+API keys identify _applications_, not _users_. If your API needs to know which individual person is making a request (for example, to return that user's data or enforce per-user permissions), API keys alone are insufficient. You would need to build a separate user-to-key mapping, which quickly becomes an ad hoc (and likely insecure) reimplementation of OAuth.
+
+For user-level authentication and authorization, use OAuth 2.0, OpenID Connect, or session-based authentication.
+
+### Client-Side or Browser Applications
+
+API keys must be kept secret. Any key embedded in a browser application, mobile app bundle, or client-side JavaScript is effectively public. It can be extracted by anyone who inspects the source code or network traffic.
+
+If you must authenticate from a client-side application, use a backend proxy that holds the API key, or use a user-level authentication flow like OAuth 2.0 with PKCE, which was designed specifically for public clients.
+
+### Scenarios Requiring Fine-Grained Delegation
+
+OAuth 2.0 supports scopes that let a user grant an application access to specific resources ("read my email but not my contacts"). API keys have no built-in concept of delegated, user-consented permissions. If your API requires this model, OAuth is the better choice.
+
+## Decision Framework
+
+Use the following checklist to determine whether API keys are appropriate for your scenario:
+
+| Question | If yes... |
+| --- | --- |
+| Is the caller a server or backend service? | API keys are a strong fit. |
+| Do you need to identify and bill the calling application? | API keys are ideal for this. |
+| Does the API act on behalf of a specific end user? | Use OAuth 2.0 or JWTs instead. |
+| Will the key be exposed in client-side code? | Do not use API keys directly; add a backend proxy. |
+| Do you need delegated, user-consented scopes? | Use OAuth 2.0. |
+| Is simplicity and fast time-to-market a priority? | API keys have the lowest implementation overhead. |
+
+### A Practical Rule of Thumb
+
+If your API consumer is a **server** and you need to answer the question "which application or account made this request?", API keys are almost certainly the right starting point. If your API consumer is a **user** and you need to answer "which person is making this request and what are they allowed to do?", you need a user-level authentication protocol.
+
+Many successful APIs start with API keys and add OAuth 2.0 later when user-level delegation becomes a requirement. The two mechanisms are [complementary, not competing](/docs/introduction/api-keys-vs-other-auth).
+
+## Frequently Asked Questions
+
+<FAQ
+  items={[
+    {
+      q: "When should I use an API key?",
+      a: "Use an API key when a server-side caller needs to identify itself to your API for rate limiting, usage tracking, billing, or coarse access control, and you do not need to know which end user is behind the request. Server-to-server, machine-to-machine, and first-party backend integrations are the canonical cases.",
+    },
+    {
+      q: "When should I not use an API key?",
+      a: "Avoid API keys when the key would be embedded in a browser, mobile app, or any distributed client you do not control, because anyone who inspects the client can extract it. Also avoid them when you need user-scoped authorization, per-request user consent, or short-lived tokens; reach for OAuth 2.0 or signed user tokens instead.",
+    },
+    {
+      q: "Can I use API keys in a browser or mobile app?",
+      a: "Only for public, non-secret keys whose scope is intentionally narrow, for example a publishable Stripe key or a Google Maps key locked to specific referrers. Never ship a server-side / secret key to a client; treat any key embedded in shipped code as public by design.",
+    },
+    {
+      q: "Do API keys scale for multi-tenant APIs?",
+      a: "Yes. Issuing one key per tenant (or per environment per tenant) is the standard pattern and scales well to thousands of accounts. Store a hash plus a small prefix, index on the hash, and keep a per-key scope list so one tenant cannot touch another's resources.",
+    },
+    {
+      q: "How many API keys should I issue per account?",
+      a: "At least two: one 'live' key and one 'test' key, each clearly prefixed. Allow multiple active keys per environment so customers can rotate without downtime, and let them name keys ('production-readonly', 'ci-deploy') to make audit logs useful.",
+    },
+  ]}
+/>
+
+## References
+
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): catalog of the failure modes this page is steering you away from.
+- [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html): general guidance on choosing an authenticator.
+- [NIST SP 800-63B: Digital Identity Guidelines](https://pages.nist.gov/800-63-3/sp800-63b.html): formal vocabulary for "identifying an application" vs. "identifying a user."
+- [RFC 6749: OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749): the protocol to reach for when API keys are the wrong fit.
+- [Google Cloud: When to use API keys](https://cloud.google.com/docs/authentication/api-keys#when-to-use): a major provider's decision framework, consistent with the one on this page.
+- [CWE-798: Use of Hard-coded Credentials](https://cwe.mitre.org/data/definitions/798.html): the anti-pattern that follows when teams reach for API keys in client-side contexts where they don't belong.

@@ -1,0 +1,123 @@
+---
+title: "Expiration Policies"
+description: "When and why API keys should expire, and how to implement renewal flows and automated warnings."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+Expiration is about automatic key death at a predetermined time. For proactive key replacement before expiration, where a new key is issued and the old one is phased out on a schedule, see [Key Rotation](/docs/security/key-rotation).
+
+<TLDR>
+
+- Expiration = automatic credential death at a deadline. It's the backstop that fires even when every other control fails.
+- Default to "this key expires." Make non-expiring keys an explicit opt-in with documented justification.
+- Match the window to the consumer: hours for one-time exports, days for CI tokens, months for third-party integrations.
+- Notify on a schedule: 30 / 7 / 1 days out via email, dashboard banners, and response headers (`X-Api-Key-Expires`). Surprise expirations cause outages and support load.
+- Enforce `expires_at` early in the middleware pipeline (cheap lookup) and return `401` with a clear, actionable error on expiry. No soft grace periods *after* expiration; the grace window belongs before.
+
+</TLDR>
+
+## The Risk of Never-Expiring Keys
+
+A key that never expires is a key that works forever, for anyone who has it. Over time, the probability that a long-lived key has been leaked, logged, or forgotten approaches certainty. Teams change, employees leave, integrations get deprecated, but the key keeps working.
+
+Never-expiring keys also violate the principle of defense in depth. [Rotation](/docs/security/key-rotation), [scoping](/docs/security/scoping-and-permissions), and [rate limiting](/docs/security/rate-limiting) all reduce risk, but expiration provides a hard backstop: even if every other control fails, the key eventually stops working.
+
+## Choosing an Expiration Window
+
+The right expiration period depends on the sensitivity of the API and the operational burden on consumers:
+
+| Use Case | Suggested Expiration | Rationale |
+|---|---|---|
+| Internal service-to-service | 30-90 days | Automated rotation makes short lifetimes practical |
+| Third-party integrations | 6-12 months | Balances security with partner convenience |
+| CI/CD pipeline tokens | 1-7 days | Short-lived, created on demand per run |
+| One-time data exports | Hours | Scoped to a single task, then discarded |
+
+There is no universal answer, but the default should always be "this key expires" rather than "this key lives forever." Make non-expiring keys an explicit opt-in that requires justification.
+
+## Short-Lived vs. Long-Lived Keys
+
+**Short-lived keys** (minutes to days) are ideal when automation handles issuance and renewal. CI/CD pipelines, serverless functions, and machine-to-machine flows can request a fresh key for each job. The tradeoff is more infrastructure to manage token issuance.
+
+**Long-lived keys** (months to years) make sense when a human is involved in the configuration. A developer pasting a key into a third-party dashboard shouldn't need to update it every week. The tradeoff is a wider exposure window if the key [leaks](/docs/security/leak-detection).
+
+When in doubt, start with shorter expiration and extend it only if consumer feedback demands it.
+
+## Renewal Flows
+
+Make renewal as frictionless as possible:
+
+1. **Self-service renewal**: Consumers visit the developer portal or call a renewal endpoint before the key expires. The new key is returned immediately, and the old key enters a grace period.
+2. **Automatic renewal**: For internal services, a secrets manager or sidecar process requests a new key before the current one expires, without human intervention.
+3. **Prompted renewal**: The API returns a warning header as the key approaches expiration, prompting the consumer to act.
+
+```http
+HTTP/1.1 200 OK
+X-Api-Key-Expires: 2026-05-01T00:00:00Z
+X-Api-Key-Expires-In: 604800
+```
+
+Automatic renewal is usually handled by a secrets-automation layer rather than the API itself. HashiCorp Vault's dynamic secrets, AWS Secrets Manager's rotation lambdas, and Doppler's scheduled rotations can all call your key-issuance endpoint on a schedule and roll the value into downstream services. If the issuance endpoint is exposed through a managed gateway such as Zuplo, the gateway itself enforces the new expiration on subsequent requests without redeploying the upstream service. [Zuplo's API Keys Overview](https://zuplo.com/docs/articles/api-key-management?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) documents the expiration and management flows through the portal and API.
+
+## Automated Expiration Warnings
+
+Consumers should never be surprised by an expired key. Build a notification timeline:
+
+| Timeframe | Action |
+|---|---|
+| 30 days before expiration | Email notification + dashboard banner |
+| 7 days before expiration | Email reminder + webhook event |
+| 1 day before expiration | Urgent email + API response header warning |
+| On expiration | Key returns `401 Unauthorized` with a clear error message |
+
+```json
+{
+  "error": "key_expired",
+  "message": "This API key expired on 2026-05-01. Generate a new key at https://dashboard.example.com/keys."
+}
+```
+
+Include a direct link to the key management page in every expiration message. The fewer steps between "my key expired" and "I have a new key," the less downtime the consumer experiences.
+
+## Enforcement
+
+When a key expires, it should immediately return `401 Unauthorized`. Do not allow a soft grace period after the stated expiration date, as that undermines trust in the expiration system. The grace period belongs *before* expiration (during rotation), not after.
+
+Store the `expires_at` timestamp alongside the key hash and check it on every request. This check is cheap and should happen early in your middleware pipeline, before any business logic executes.
+
+```javascript
+async function checkKeyExpiration(req, res, next) {
+  const { expires_at } = req.apiKeyRecord;
+
+  if (expires_at && new Date(expires_at) <= new Date()) {
+    return res.status(401).json({
+      error: "key_expired",
+      message: `This API key expired on ${expires_at}. Generate a new key at https://dashboard.example.com/keys.`,
+    });
+  }
+
+  // Optionally warn if expiration is approaching
+  if (expires_at) {
+    const msRemaining = new Date(expires_at) - new Date();
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+    if (msRemaining < sevenDays) {
+      res.setHeader("X-Api-Key-Expires", expires_at);
+      res.setHeader("X-Api-Key-Expires-In", String(Math.floor(msRemaining / 1000)));
+    }
+  }
+
+  next();
+}
+```
+
+## References
+
+- [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management (§5.3 Cryptoperiods)](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final): the authoritative guidance that every key should have a bounded lifetime.
+- [NIST SP 800-63B: Digital Identity Guidelines §5.2.11 Reauthentication](https://pages.nist.gov/800-63-3/sp800-63b.html#reauthn): periodic re-issuance requirements for authenticators.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the risk category that includes credentials without lifetime bounds.
+- [OWASP Authentication Cheat Sheet: Token expiration](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html): general requirements for bounded credential lifetimes.
+- [CWE-613: Insufficient Session Expiration](https://cwe.mitre.org/data/definitions/613.html): the weakness directly addressed by this page.
+- [RFC 7009: OAuth 2.0 Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009): sibling mechanism for invalidating credentials before their natural expiration.

@@ -1,0 +1,44 @@
+---
+title: "About apikeys.guide"
+description: "Editorial stance, update cadence, contributor criteria, and contact information for apikeys.guide, the open-source guide to API key security."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+## What this site is
+
+**apikeys.guide** is an open-source reference for designing, implementing, and operating API key authentication. It exists because no RFC defines how API keys should work. Every provider has invented their own conventions, and the practitioners figuring out the right ones have had to reconstruct them from scattered vendor docs, security standards, and hard-won production experience.
+
+The goal is a single, stable, opinionated resource you can reach for when you are building a key system or evaluating somebody else's. Every page is written to be read as a standalone answer to a specific question, with the depth of a reference manual and the bias toward action of a runbook.
+
+## Editorial stance
+
+- **Security over convenience.** When a pattern has a meaningful attack surface, we name it, even if it is popular. When a "best practice" is cargo-culted, we say so.
+- **Practitioner-first.** Guidance is grounded in how real teams operate APIs: what breaks at 2am, what is worth automating, what can wait. Academic purity that fails under production load is called out.
+- **Vendor-neutral, not vendor-free.** apikeys.guide is sponsored by [Zuplo](https://zuplo.com?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys), an API gateway platform. Comparisons to managed platforms, including Zuplo's, are held to the same standard as self-hosted patterns: name the trade-off, show the failure mode, let the reader choose. No page is paid placement.
+- **Primary sources over hot takes.** Every guidance page links to the RFC, NIST publication, OWASP resource, or CWE entry that backs it. If a claim is not traceable to a primary source, it is the author's considered opinion and labelled as such.
+- **Plain English.** We prefer concrete examples, numbered steps, and working code over abstractions. Jargon is introduced with its definition.
+
+## Update cadence
+
+- **Reviewed quarterly.** Every page is reviewed at least once per calendar quarter against the latest RFCs, NIST and OWASP publications, and major-vendor documentation. Pages that passed review without change still have their `dateModified` bumped so the review is auditable.
+- **Urgent updates land as-needed.** When a vulnerability class (e.g., a new prompt-injection vector for agent keys) or a new official guideline (e.g., an MCP specification revision) lands, the affected pages are updated and stamped within a week.
+- **Every page shows when it was last reviewed.** Look for the `Updated <month> <year>` badge at the top of any doc. The same `dateModified` value drives the `TechArticle` JSON-LD that crawlers see.
+
+## Contributor criteria
+
+Contributions are welcome from practitioners. To keep the quality bar high, we ask that changes meet the following criteria:
+
+1. **Primary-source backed.** New guidance must cite an RFC, NIST / OWASP / CWE reference, or a widely adopted vendor implementation. Opinions are fine but must be flagged as such.
+2. **Action-oriented.** Prefer concrete steps, working code, and named failure modes over high-level framing. If a reader cannot act on a paragraph, it can usually be cut.
+3. **Vendor-neutral.** Comparisons to specific platforms are welcome when they are illustrative; they should not read as promotion. The site is vendor-neutral in editorial content even where sponsorship is disclosed in the footer.
+4. **Security-reviewed when relevant.** Pages that touch cryptography, storage, or revocation get an extra pair of eyes before merge. Obvious mistakes (raw-key storage, `Math.random()`, timing-unsafe comparisons) are non-starters.
+
+Contributions land via pull request on [github.com/zuplo/apikeys.guide](https://github.com/zuplo/apikeys.guide). Small fixes (typos, broken links, clarifications) are usually merged within a few days; larger changes go through review and may be adjusted to fit the site's voice.
+
+## Contact
+
+- **Contributions, typos, broken links:** open a pull request on [github.com/zuplo/apikeys.guide](https://github.com/zuplo/apikeys.guide).
+- **Corrections, security concerns, or factual errors:** open an issue on [github.com/zuplo/apikeys.guide/issues](https://github.com/zuplo/apikeys.guide/issues).

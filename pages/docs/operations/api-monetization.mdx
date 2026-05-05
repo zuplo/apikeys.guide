@@ -1,0 +1,179 @@
+---
+title: "API Monetization"
+description: "How API keys connect to billing, usage metering, plan enforcement, and the infrastructure behind paid APIs."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+API keys are not just an authentication mechanism; they are often the billing identifier for paid APIs. Every request carries a key that maps to a consumer account, making it straightforward to count usage, enforce plan limits, and generate invoices.
+
+<TLDR>
+
+- Because every authenticated request carries a key that maps to a consumer, API keys are the natural billing identifier for paid APIs.
+- Store plan metadata (tier, rate limit, quota, enabled features) on the consumer record so enforcement happens without an extra lookup; fall back to an external plan service only when the billing system must be the source of truth.
+- Meter what actually costs you: request count is fine for flat pricing, but compute units, data transfer, or resource time are more honest for uneven endpoints.
+- Run a dual pipeline: atomic counters for real-time enforcement (rate limits, quota checks) and an asynchronous event stream for durable billing records.
+- Decide the quota-exhaustion policy up front (hard cutoff, overage billing, or soft limit with notification), and make sure metering and the billing system agree on what counts as a billable event.
+
+</TLDR>
+
+## The Key-to-Billing Pipeline
+
+A monetized API typically flows through these stages:
+
+1. **Authentication.** The API key is [validated](/docs/implementation/validation-and-lookup) and mapped to a consumer record.
+2. **Plan lookup.** The consumer record includes a plan tier (free, pro, enterprise) that determines rate limits, quotas, and available features.
+3. **Enforcement.** [Rate limits](/docs/security/rate-limiting) and quotas are applied based on the plan tier before the request reaches business logic.
+4. **Metering.** Every successful (and sometimes unsuccessful) request is counted and attributed to the consumer's account.
+5. **Billing.** Metered usage is aggregated on a billing cycle (daily, monthly) and fed to a billing system to generate invoices or trigger charges.
+
+## Attaching Plan Data to Keys
+
+The consumer record behind an API key needs to include plan information that is available at request time. There are two common approaches:
+
+### Metadata on the Consumer Record
+
+The simplest model is to store plan data directly on the consumer or key record:
+
+```json
+{
+  "consumer_id": "cust_8f3a2b",
+  "plan": "pro",
+  "rate_limit": 600,
+  "monthly_quota": 50000,
+  "features": ["batch-processing", "webhooks"]
+}
+```
+
+When the key is validated, the plan data is immediately available for enforcement. This is the model used by most [API gateways](/docs/architecture/gateway-based-authentication), where consumer metadata travels with the key record and is injected into the request context.
+
+**Advantages:** No additional lookup at request time. The gateway or validation middleware has everything it needs after the key lookup.
+
+**Limitations:** Plan changes require updating the consumer record and waiting for [cache propagation](/docs/implementation/validation-and-lookup#caching-strategies). If your billing system is the source of truth for plan data, you need a synchronization mechanism.
+
+### External Plan Lookup
+
+Alternatively, the key record stores only the consumer ID, and the plan data is fetched from a separate service (your billing system, subscription database, or identity provider) at request time or cached with a TTL.
+
+**Advantages:** The billing system remains the single source of truth. Plan changes take effect immediately without updating the key store.
+
+**Limitations:** Adds latency (an additional service call or cache lookup on every request). Requires the plan service to be highly available, because if it is down, you cannot enforce plan limits.
+
+Most teams start with metadata on the consumer record and move to an external lookup only when the synchronization complexity of the inline approach becomes a problem.
+
+## Usage Metering
+
+Metering is the act of counting what each consumer uses. The granularity and accuracy of your metering directly affect your ability to bill correctly.
+
+### What to Meter
+
+The simplest metric is **request count**: each API call increments a counter for the consumer. This is sufficient for flat per-request pricing models.
+
+More sophisticated models may meter:
+
+- **Compute units**, weighted by endpoint cost (a search query costs more than a status check)
+- **Data transfer**: bytes sent or received
+- **Resource time**: seconds of compute consumed (common for ML inference APIs)
+- **Active resources**: number of provisioned objects (databases, environments, deployments)
+
+Choose the metric that most closely aligns with the cost your API incurs per consumer. If all endpoints cost roughly the same to serve, request count is fine. If some endpoints are orders of magnitude more expensive, weighted metering prevents heavy users from subsidizing their usage under a flat-rate plan.
+
+### Metering Architecture
+
+Metering must be fast (it runs on every request) and durable (lost counts mean lost revenue or incorrect billing).
+
+**Synchronous counting** writes a usage record on every request (to a database, time-series store, or append-only log). This is the most accurate approach but adds write latency to every API call.
+
+**Asynchronous counting** emits usage events to a queue or stream (Kafka, SQS, Kinesis) and a background consumer aggregates them. This decouples metering from the request path, avoiding latency impact, but introduces a window where counts are in flight and not yet durable.
+
+**Counter-based metering** uses atomic counters (Redis `INCR`, DynamoDB atomic updates) to maintain running totals. This is fast and simple but can lose data if the counter store goes down before counts are persisted to durable storage.
+
+In practice, most production metering systems use a combination: atomic counters for real-time enforcement (rate limits, quota checks) and an asynchronous event stream for durable billing records.
+
+## Plan Enforcement
+
+Enforcement is where plan data meets request handling. There are several dimensions to enforce:
+
+### Rate Limits by Plan
+
+The most common form of plan enforcement is [tiered rate limiting](/docs/security/rate-limiting):
+
+| Plan | Requests/minute | Requests/day |
+| --- | --- | --- |
+| Free | 60 | 1,000 |
+| Pro | 600 | 50,000 |
+| Enterprise | 6,000 | Unlimited |
+
+The rate limiter reads the consumer's plan from the key record and applies the corresponding limits. Standard [rate-limit response headers](/docs/security/rate-limiting) (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`) tell the consumer where they stand.
+
+### Quota Enforcement
+
+Quotas differ from rate limits in that they track cumulative usage over a billing period (usually monthly) rather than instantaneous throughput.
+
+When a consumer hits their monthly quota, you need to decide what happens:
+
+- **Hard cutoff.** Return `429 Too Many Requests` with a message indicating the quota is exhausted and when it resets. This is the simplest to implement and the clearest for consumers.
+- **Overage billing.** Allow requests to continue but bill at an overage rate. This requires accurate metering past the quota boundary and a billing system that supports overage charges.
+- **Soft limit with notification.** Allow requests but notify the consumer (via response headers, email, or webhook) that they have exceeded their quota and should upgrade.
+
+The right approach depends on your business model. Hard cutoffs are appropriate for free tiers; overage billing is common for paid plans where stopping service would disrupt the consumer's business.
+
+### Feature Gating
+
+Some plans include access to specific endpoints or capabilities. A free plan might expose read-only endpoints while a pro plan unlocks write operations, batch processing, or webhooks.
+
+Feature gates are typically enforced after key validation and plan lookup:
+
+```javascript
+if (!consumer.features.includes("batch-processing")) {
+  return res.status(403).json({
+    error: "Batch processing requires a Pro plan or higher",
+  });
+}
+```
+
+If you use an API gateway, feature gating can be implemented as a policy that checks consumer metadata against endpoint requirements. If your [scoping model](/docs/security/scoping-and-permissions) already supports fine-grained permissions, feature gating may map naturally onto scopes.
+
+## Handling Plan Changes
+
+When a consumer upgrades or downgrades their plan, the change needs to take effect across the system.
+
+**Immediate enforcement.** The consumer record is updated, caches are invalidated, and the new limits apply on the next request. This is the expected behavior for upgrades (the consumer just paid for more capacity) and for downgrades at the end of a billing period.
+
+**Prorated transitions.** If a consumer upgrades mid-cycle, you may need to prorate their quota (how much of the new allowance applies to the remainder of the period?) and adjust billing accordingly. This is a billing-system concern but it affects how your metering and enforcement layers interpret the plan data.
+
+**Grace periods for downgrades.** If a consumer downgrades from Pro to Free, immediately dropping their rate limit from 600 to 60 requests/minute could break their application. Consider allowing the old limits to remain in effect until the end of the current billing period.
+
+## Where Gateways Help
+
+API gateways are particularly well-suited to monetization because they already sit on the request path and see every request. A gateway that supports consumer metadata can handle:
+
+- Plan-based rate limiting using consumer metadata (plan tier → rate limit)
+- Quota tracking using built-in or integrated counters
+- Feature gating based on consumer metadata or scopes
+- Usage logging that feeds into billing pipelines
+
+This does not mean you need a gateway to monetize your API. The same logic can be implemented in application middleware. But if you are already using a [gateway for authentication](/docs/architecture/gateway-based-authentication), monetization enforcement is an incremental addition rather than a separate system. Several gateways wire this up directly — Kong (via its marketplace plugins), Apigee (with its monetization module), and Zuplo (with native Stripe integration) all handle metering and quota enforcement at the gateway layer, so the API key that authenticates the request is the same identifier used for usage tracking and invoicing. [Zuplo's monetization docs](https://zuplo.com/docs/articles/monetization?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) cover the Stripe wiring in detail.
+
+## Billing System Integration
+
+The metering layer produces usage data; the billing system turns it into invoices. This integration is typically one of:
+
+**Direct integration.** Your metering system writes usage records directly to your billing platform's API (Stripe Billing, Chargebee, Orb, Amberflo, etc.). The billing platform handles aggregation, invoicing, and payment collection. Some API platforms handle this integration natively: Amberflo and Metronome ship usage events to Stripe, Chargebee, or a billing-native pipeline, and gateways such as Kong and Zuplo sync metering data with Stripe from the gateway layer so you do not have to build the metering-to-billing pipeline yourself.
+
+**Warehouse-based.** Usage events are written to a data warehouse or lake, aggregated by a scheduled job, and the aggregated totals are pushed to the billing system. This gives you more control over aggregation logic and a complete audit trail, at the cost of pipeline complexity.
+
+**Hybrid.** Real-time counters enforce limits, while a parallel event stream feeds the billing system for accurate invoicing. Enforcement and billing can use different data paths as long as they agree on totals at reconciliation time.
+
+Whichever approach you use, ensure your metering and billing systems agree on what counts as a billable event. Discrepancies (where the consumer sees one number on their dashboard and a different number on their invoice) erode trust and generate support tickets.
+
+## References
+
+- [RFC 6585 §4: 429 Too Many Requests](https://datatracker.ietf.org/doc/html/rfc6585#section-4) and [RFC 7231 §7.1.3: Retry-After](https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.3): the HTTP semantics for quota and rate-limit rejection.
+- [OWASP API Security Top 10 (2023), API4:2023 Unrestricted Resource Consumption](https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/): the risk category that makes plan enforcement a security control, not just a billing feature.
+- [OWASP API Security Top 10, API6:2023 Unrestricted Access to Sensitive Business Flows](https://owasp.org/API-Security/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/): the risk that uncapped quotas on revenue-critical endpoints fall into.
+- [Stripe: Metered billing](https://docs.stripe.com/products-prices/pricing-models#usage-based-pricing): reference implementation for the usage-based pricing model most API businesses converge on.
+- [Google Cloud: API keys and quota](https://cloud.google.com/docs/authentication/api-keys#quotas): how a major provider ties key identity to quota enforcement.
+- [RateLimit header fields for HTTP (IETF draft)](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/): standardization work that aligns rate-limit and quota headers across providers.

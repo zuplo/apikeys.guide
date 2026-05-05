@@ -1,0 +1,63 @@
+---
+title: "What Are API Keys?"
+description: "A comprehensive introduction to API keys: what they are, how they work, and how servers use them to identify and authorize API consumers."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+toc: true
+---
+
+<HomeTitle />
+
+<div className="not-prose">
+  <span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+  <h1 className="akg-hero-title">API Keys</h1>
+  <div className="akg-hero-lede">
+    The missing guide to securing, implementing, and managing API key authentication.
+  </div>
+  <div className="akg-hero-sub">
+    No RFC defines how API keys should work. Every provider invents their own approach.
+    This open-source guide documents the best practices that have emerged, so you don't
+    have to learn them the hard way.
+  </div>
+  <KeyAnatomy />
+</div>
+
+## Definition
+
+An API key is a unique identifier (typically a long string of characters) that a client includes in API requests so the server can identify who is making the call. Think of it as a lightweight credential: it tells the API provider _which_ application or account is responsible for a given request, without necessarily proving _who the end user is_.
+
+API keys are one of the oldest and most widely deployed authentication mechanisms on the web. Nearly every major API provider, from Stripe to Google Maps, issues API keys as the primary way developers connect to their services.
+
+<SectionGrid />
+<HomeCTA />
+
+## Frequently Asked Questions
+
+<FAQ
+  items={[
+    {
+      q: "What is an API key?",
+      a: "An API key is a long, unique string that a client sends with each API request so the server can identify the calling application or account. It acts as a lightweight credential: the server looks the key up, decides whether to accept the request, and attaches the resulting identity (usage, permissions, rate limits) to it.",
+    },
+    {
+      q: "Are API keys secret?",
+      a: "Server-side API keys are secrets and must be treated like passwords: stored in environment variables or a secrets manager, never committed to source control, and rotated if exposed. Public / publishable keys (used in browsers or mobile apps) are not secret, but they should be constrained by origin, referrer, or scope.",
+    },
+    {
+      q: "How is an API key different from a password?",
+      a: "A password identifies a human user during an interactive sign-in; an API key identifies a machine or service across many non-interactive requests. Keys are typically longer, have higher entropy, and are designed to be rotated and revoked programmatically rather than memorised.",
+    },
+    {
+      q: "Do API keys authenticate the user or the application?",
+      a: "API keys authenticate the application or account that holds the key, not the end user behind it. If you need to know which user performed an action, you need an additional identity layer, usually OAuth 2.0 or a signed user token carried alongside the key.",
+    },
+    {
+      q: "Where should an API key be sent in a request?",
+      a: "The recommended place is the Authorization header, typically as 'Authorization: Bearer <key>'. Some providers accept an 'X-Api-Key' header or a query-string parameter; query strings should be avoided because they are logged by proxies and browser history.",
+    },
+    {
+      q: "How should API keys be stored on the server?",
+      a: "Store only a hash of the key (SHA-256 is sufficient because keys are already high-entropy). Show the raw key to the user exactly once at creation time, then persist the hash plus a short prefix for identification. This way a database leak does not expose usable keys.",
+    },
+  ]}
+/>

@@ -1,0 +1,1871 @@
+// AUTO-GENERATED from src/styles/custom-source.css via scripts/gen-css.js.
+// Zudoku bundles zudoku.config.tsx with Vite in a browser-like context, so we
+// inline the stylesheet as a string rather than reading it off disk at runtime.
+
+export const customCss = `/*
+ * apikeys.guide custom styling. Injected into Zudoku via theme.customCss in
+ * zudoku.config.tsx.
+ *
+ * Responsibilities:
+ *   1. Define brand colour tokens + font-family variables mirroring the old
+ *      Astro site's @theme block.
+ *   2. Recreate the bespoke prose styling (Readex Pro headings, dark code
+ *      blocks on both themes, callouts, link styling, blockquote border,
+ *      scrollable tables, checkbox task lists).
+ *   3. Provide KeyAnatomy + SectionGrid + HomeCTA helper classes so the
+ *      ported React components can use the same visual language as the
+ *      original Astro versions.
+ *
+ * The Readex Pro display font is loaded via <link> tags in SiteMeta.tsx
+ * (not via @import here). Zudoku concatenates this file after its own CSS,
+ * which would break a top-level @import per the CSS spec.
+ *
+ * Scope: target Zudoku's content classes \`.prose\`, \`.typography\` plus our
+ * own \`.akg-*\` prefix so we never clash with shadcn component styles.
+ */
+
+:root {
+  /* Brand palette - static, ignores light/dark */
+  --akg-brand-blue: #1456f0;
+  --akg-brand-sky: #3daeff;
+  --akg-brand-pink: #ea5ec1;
+  --akg-zuplo-pink: #ff00bd;
+  --akg-primary-200: #bfdbfe;
+  --akg-primary-light: #60a5fa;
+  --akg-primary-500: #3b82f6;
+  --akg-primary-600: #2563eb;
+  --akg-primary-700: #1d4ed8;
+  --akg-brand-deep: #17437d;
+
+  /* Font families - Zudoku owns sans+mono, we layer display on top */
+  --akg-font-display: "Readex Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --akg-font-sans: "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --akg-font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+
+
+  /* Light-mode surface + text tokens (mirror the old Astro values exactly) */
+  --akg-bg: #ffffff;
+  --akg-bg-secondary: #f0f0f0;
+  --akg-border: #e5e7eb;
+  --akg-border-light: #f2f3f5;
+  --akg-text: #222222;
+  --akg-text-heading: #18181b;
+  --akg-text-charcoal: #181e25;
+  --akg-text-secondary: #45515e;
+  --akg-text-muted: #8e8e93;
+  --akg-text-helper: #5f5f5f;
+  --akg-dark-surface: #181e25;
+  --akg-dark-surface-lighter: #1f2731;
+  --akg-code-bg: #181e25;
+  --akg-inline-code-bg: #f0f0f0;
+  --akg-inline-code-text: #181e25;
+  --akg-callout-tip-bg: #eff6ff;
+  --akg-callout-warn-bg: #fffbeb;
+  --akg-callout-danger-bg: #fef2f2;
+  --akg-shadow-subtle: 0px 4px 6px rgba(0, 0, 0, 0.08);
+  --akg-shadow-ambient: 0px 0px 22px rgba(0, 0, 0, 0.08);
+  --akg-shadow-elevated: 0px 12px 16px -4px rgba(36, 36, 36, 0.08);
+}
+
+/* Zudoku uses .dark on <html>, same convention as the old Astro site */
+.dark {
+  --akg-bg: #0f1117;
+  --akg-bg-secondary: #191c24;
+  --akg-border: #2a2e3a;
+  --akg-border-light: #1f2330;
+  --akg-text: #e2e4e9;
+  --akg-text-heading: #f1f3f5;
+  --akg-text-charcoal: #f1f3f5;
+  --akg-text-secondary: #9ca3af;
+  --akg-text-muted: #6b7280;
+  --akg-text-helper: #9ca3af;
+  --akg-dark-surface: #0a0c10;
+  --akg-dark-surface-lighter: #12141a;
+  --akg-code-bg: #0d0f14;
+  --akg-inline-code-bg: #1c1f2b;
+  --akg-inline-code-text: #e2e4e9;
+  --akg-callout-tip-bg: rgba(59, 130, 246, 0.1);
+  --akg-callout-warn-bg: rgba(245, 158, 11, 0.1);
+  --akg-callout-danger-bg: rgba(239, 68, 68, 0.1);
+  --akg-shadow-subtle: 0px 4px 6px rgba(0, 0, 0, 0.3);
+  --akg-shadow-ambient: 0px 0px 22px rgba(0, 0, 0, 0.3);
+  --akg-shadow-elevated: 0px 12px 16px -4px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------------------------------------------------------------------------
+ * Site title in the top header.
+ *
+ * Zudoku's \`site.logo\` renders just the image and \`site.title\` is only used
+ * for the HTML <title>. The live apikeys.guide site has "apikeys.guide"
+ * rendered in Readex Pro next to the key icon — recreate that via ::after
+ * on the <a href="/"> link at the left of the header.
+ * ------------------------------------------------------------------------- */
+
+header a[href="/"][data-discover="true"] > div::after {
+  content: "apikeys.guide";
+  font-family: var(--akg-font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--akg-text-heading);
+  letter-spacing: -0.01em;
+}
+
+/* ---------------------------------------------------------------------------
+ * Header actions (right side) — [GitHub pill] [theme toggle] [|] [Supported]
+ *
+ * Zudoku always renders its theme-toggle button AFTER the \`head-navigation-end\`
+ * slot content, so to get this visual order we rely on flex \`order\`. Our
+ * slot emits GitHub + separator + Supported with data-akg-order values,
+ * and we set \`order: 1\` on the theme toggle so it lands between them.
+ * ------------------------------------------------------------------------- */
+
+/* Parent flex container — Zudoku gives it \`items-center gap-2\`; tighten gap
+ * and ensure it lays out with flex order semantics. */
+header .hidden.lg\\:flex.items-center {
+  gap: 0.5rem !important;
+}
+
+/* Slot content */
+header [data-akg-order="github"]     { order: 0; }
+header button[aria-label="Toggle theme"] { order: 1; }
+header [data-akg-order="separator"]  { order: 2; }
+header [data-akg-order="sponsor"]    { order: 3; }
+
+/* Pill buttons */
+
+/* Focus-visible states for keyboard navigation */
+.akg-pill:focus-visible,
+.akg-key-segment:focus-visible {
+  outline: 2px solid var(--akg-primary-500);
+  outline-offset: 2px;
+}
+
+.akg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 9999px;
+  font-family: var(--akg-font-sans);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--akg-text);
+  background: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  line-height: 1;
+}
+
+.akg-pill--github {
+  background: rgba(24, 30, 37, 0.04);
+  color: var(--akg-text-heading);
+}
+.dark .akg-pill--github {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+.akg-pill--github:hover {
+  background: rgba(24, 30, 37, 0.08);
+}
+.dark .akg-pill--github:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.akg-pill--sponsor {
+  border: 1px solid var(--akg-border);
+  padding: 0.375rem 0.75rem 0.375rem 0.875rem;
+  color: var(--akg-text-secondary);
+}
+.dark .akg-pill--sponsor {
+  border-color: var(--akg-border-light);
+  color: rgba(255, 255, 255, 0.7);
+}
+.akg-pill--sponsor:hover {
+  border-color: var(--akg-zuplo-pink);
+  color: var(--akg-zuplo-pink);
+}
+.dark .akg-pill--sponsor:hover {
+  border-color: var(--akg-zuplo-pink);
+  color: var(--akg-zuplo-pink);
+}
+.akg-pill--sponsor:hover .akg-zuplo-mark {
+  color: var(--akg-zuplo-pink);
+}
+.akg-pill__label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--akg-text-muted);
+}
+.dark .akg-pill__label {
+  color: rgba(255, 255, 255, 0.55);
+}
+.akg-pill--sponsor svg {
+  color: var(--akg-text-heading);
+}
+.dark .akg-pill--sponsor svg {
+  color: #ffffff;
+}
+.dark .akg-zuplo-mark {
+  color: #ffffff;
+}
+
+/* Thin vertical separator between theme toggle and sponsor pill */
+.akg-header-separator {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--akg-border);
+  margin: 0 0.25rem;
+}
+.dark .akg-header-separator {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Hide the secondary "Documentation" tab bar that Zudoku renders under the
+ * main header. Our single top-level navigation category is named
+ * "Documentation", but since it's the only top-nav item there's nothing
+ * useful to surface — the sidebar already covers the same ground.
+ *
+ * Also zero out --top-nav-height so the hidden bar doesn't contribute
+ * phantom space to --header-height (used for sidebar sticky offset). */
+header > div.hidden.lg\\:block {
+  display: none !important;
+}
+:root {
+  --top-nav-height: 0px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile navigation cleanup
+ *
+ * Zudoku renders two mobile navigation affordances:
+ *   1. MobileTopNavigation — a hamburger (≡) in the header that opens a
+ *      right-side drawer. For us this only contains "Documentation" (the
+ *      single top-level nav category), which is redundant.
+ *   2. Sidebar "Menu" toggle — below the header, opens a left-side drawer
+ *      with the full documentation tree.
+ *
+ * We hide the hamburger so mobile users get one clear navigation path,
+ * and promote the theme toggle into the mobile header so dark-mode
+ * switching isn't lost.
+ * ------------------------------------------------------------------------- */
+
+/* Hide the MobileTopNavigation hamburger button and its wrapper. The
+ * \`flex lg:hidden justify-self-end\` div holds the ≡ trigger + a
+ * PageProgress bar (the header already owns its own PageProgress, so
+ * nothing is lost). */
+header div.flex.lg\\:hidden.justify-self-end {
+  display: none !important;
+}
+
+/* Make the desktop header-actions area (theme toggle, pills) visible on
+ * mobile too. This container uses \`hidden lg:flex\` — override to \`flex\`
+ * at all breakpoints so the theme toggle is reachable. */
+header div.justify-self-end > div.hidden.lg\\:flex {
+  display: flex !important;
+}
+
+/* On mobile, strip the header actions down to just the theme toggle —
+ * the GitHub pill, separator, and sponsor pill are too wide for small
+ * screens and are non-essential. */
+@media (max-width: 1023px) {
+  header [data-akg-order="github"],
+  header [data-akg-order="separator"],
+  header [data-akg-order="sponsor"] {
+    display: none !important;
+  }
+}
+
+/* Zuplo logo rendered via CSS mask so the fill inherits from color. Lets
+ * us tint it for light/dark header variants without shipping multiple SVG
+ * assets. The asset at /public/zuplo-logo.svg is the official mark from
+ * https://zuplo.com/logo-zuplo.svg. */
+.akg-zuplo-mark {
+  display: inline-block;
+  width: 58px;
+  height: 16px;
+  color: var(--akg-text-heading);
+  background: currentColor;
+  -webkit-mask-image: url("/zuplo-logo.svg");
+  mask-image: url("/zuplo-logo.svg");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  vertical-align: middle;
+}
+
+/* ---------------------------------------------------------------------------
+ * Base site typography — DM Sans body, Readex Pro headings in layout chrome.
+ * ------------------------------------------------------------------------- */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--akg-font-sans);
+  color: var(--akg-text);
+  background-color: var(--akg-bg);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile content overflow
+ *
+ * Zudoku's layout grid can exceed the viewport width on narrow screens
+ * (e.g. iPhone 12 Pro at 390px) because grid children with min-width:auto
+ * grow to fit their intrinsic content. Clipping at the html level is the
+ * standard mobile fix — prevents horizontal scrolling without breaking
+ * internal scroll on code blocks.
+ * ------------------------------------------------------------------------- */
+
+@media (max-width: 1023px) {
+  body > div:first-child {
+    overflow-x: clip;
+    max-width: 100vw;
+  }
+
+  /* Constrain the header's inner flex to the viewport so the theme toggle
+   * doesn't get clipped by the root overflow-x: clip. */
+  header .max-w-screen-2xl {
+    max-width: 100% !important;
+  }
+
+  main[data-pagefind-body] {
+    min-width: 0;
+    max-width: 100vw;
+  }
+
+  .prose pre,
+  .typography pre,
+  .prose pre:has(.code-block-wrapper),
+  .typography pre:has(.code-block-wrapper) {
+    max-width: calc(100vw - 2rem);
+    box-sizing: border-box;
+  }
+
+  .prose,
+  .typography {
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+
+}
+
+/* ---------------------------------------------------------------------------
+ * Prose (article body) — matches old .prose styles faithfully.
+ * Zudoku wraps markdown in .prose.typography; scope accordingly for specificity.
+ * ------------------------------------------------------------------------- */
+
+.prose,
+.typography {
+  max-width: 72ch;
+  font-size: 1rem;
+  line-height: 1.75;
+  color: var(--akg-text);
+}
+
+.prose h1,
+.typography h1 {
+  font-family: var(--akg-font-display);
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  color: var(--akg-text-heading);
+  letter-spacing: -0.01em;
+}
+
+.prose h2,
+.typography h2 {
+  font-family: var(--akg-font-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--akg-text-heading);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--akg-border-light);
+  letter-spacing: -0.005em;
+}
+
+.prose h3,
+.typography h3 {
+  font-family: var(--akg-font-display);
+  font-size: 1.25rem;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+  color: var(--akg-text-heading);
+}
+
+.prose h4,
+.typography h4 {
+  font-family: var(--akg-font-display);
+  font-size: 1.0625rem;
+  font-weight: 500;
+  margin-top: 1.5rem;
+  margin-bottom: 0.375rem;
+  color: var(--akg-text-heading);
+}
+
+.prose p,
+.typography p {
+  margin-bottom: 1.25rem;
+}
+
+.prose a,
+.typography a {
+  color: var(--akg-primary-500);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose a:hover,
+.typography a:hover {
+  color: var(--akg-primary-600);
+}
+
+.prose ul,
+.typography ul,
+.prose ol,
+.typography ol {
+  margin-bottom: 1.25rem;
+  padding-left: 1.5rem;
+}
+
+.prose li,
+.typography li {
+  margin-bottom: 0.375rem;
+}
+
+.prose ul > li,
+.typography ul > li {
+  list-style-type: disc;
+}
+
+.prose ol > li,
+.typography ol > li {
+  list-style-type: decimal;
+}
+
+/* Checkbox-style list items rendered from markdown \`- [ ]\` / \`- [x]\` */
+.prose li:has(> input[type="checkbox"]),
+.typography li:has(> input[type="checkbox"]) {
+  list-style-type: none;
+  margin-left: -1.5rem;
+  padding-left: 0;
+}
+
+.prose li > input[type="checkbox"],
+.typography li > input[type="checkbox"] {
+  margin-right: 0.5rem;
+  accent-color: var(--akg-primary-600);
+}
+
+.prose strong,
+.typography strong {
+  font-weight: 600;
+  color: var(--akg-text-heading);
+}
+
+.prose code,
+.typography code {
+  font-family: var(--akg-font-mono);
+  font-size: 0.875em;
+  background: var(--akg-inline-code-bg);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  color: var(--akg-inline-code-text);
+  font-weight: 400;
+}
+
+.prose pre,
+.typography pre {
+  position: relative;
+  font-family: var(--akg-font-mono);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  background: var(--akg-code-bg) !important;
+  color: #e2e8f0 !important;
+  /* Padding applied here (unlayered — beats the padding rule in @layer theme
+   * for normal cascade: unlayered > layered). Keep in sync with the
+   * @layer theme pre rule below that also sets padding, in case this
+   * selector ever loses specificity to a more-specific Zudoku rule. */
+  padding: 1.25rem 1.5rem;
+  border-radius: 13px;
+  overflow-x: auto;
+  margin-bottom: 1.5rem;
+}
+
+.prose pre code,
+.typography pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+ * Code block overrides live inside @layer theme.
+ *
+ * Zudoku/Shiki paints the code background via:
+ *   @layer base { .shiki { background-color: var(--shiki-light-bg) !important } }
+ *
+ * The CSS cascade for \`!important\` rules is the REVERSE of normal rules:
+ * earliest-declared layer wins, and unlayered !important is the LOWEST
+ * priority. Zudoku's top-of-file declaration is
+ *   @layer theme, base, components, utilities;
+ * so the \`!important\` priority order (high → low) is
+ *   theme > base > components > utilities > unlayered.
+ *
+ * Placing our overrides in \`@layer theme\` means our \`!important\` rules
+ * beat Shiki's \`@layer base\` ones consistently — regardless of selector
+ * specificity or source order.
+ * ------------------------------------------------------------------------- */
+
+@layer theme {
+
+/* ---------------------------------------------------------------------------
+ * Flatten Zudoku's code-block wrapper down to a single dark rectangle.
+ *
+ * Zudoku emits:
+ *   <pre>
+ *     <div class="code-block-wrapper border rounded-xl">
+ *       <div class="bg-black/4">               ← language-label + copy btn row
+ *          <div><svg/>Code</div>
+ *          <button>Copy</button>
+ *       </div>
+ *       <div class="code-block scrollbar bg-black/4">
+ *         <code class="shiki overflow-x-auto scrollbar">…</code>
+ *       </div>
+ *     </div>
+ *   </pre>
+ *
+ * We want: the <pre> itself is the visible dark rounded rectangle with
+ * padding + a floating copy button in the top-right corner. Every inner
+ * wrapper becomes transparent and contributes no padding, borders, or
+ * scrollbars. Scrollbars are hidden entirely (most code snippets fit on
+ * one line and the default ones look bad on our dark bg).
+ *
+ * Selectors are bumped with a \`pre\` ancestor so they out-specify Zudoku's
+ * Tailwind utilities like \`bg-black/4\` that would otherwise layer extra
+ * tint on top and create the "nested rectangle" look.
+ * ------------------------------------------------------------------------- */
+
+/* Outer rectangle: this is the only layer with visible bg + radius.
+ * We also redefine the Shiki CSS custom properties here so the bundled
+ * Shiki stylesheet (which paints \`.shiki { background: var(--shiki-light-bg) }\`
+ * with --shiki-light-bg = #fff) resolves to transparent instead of white. */
+.typography pre:has(.code-block-wrapper),
+.prose pre:has(.code-block-wrapper) {
+  background: var(--akg-code-bg) !important;
+  color: #e2e8f0;
+  border-radius: 13px;
+  padding: 1.25rem 1.5rem;
+  margin: 1.5rem 0;
+  overflow: hidden;
+  position: relative;
+  line-height: 1.65;
+  font-family: var(--akg-font-mono);
+  font-size: 0.875rem;
+
+  /* Force Shiki's bg variables to transparent for both modes so the
+   * built-in \`.shiki { background: var(--shiki-light-bg) }\` rule no
+   * longer paints a white rectangle over our dark <pre>. */
+  --shiki-light-bg: transparent;
+  --shiki-dark-bg: transparent;
+}
+
+/* Re-map --shiki-light to --shiki-dark at the span level so Shiki's
+ * default rule \`.shiki span { color: var(--shiki-light) }\` uses the
+ * span's dark-palette color (e.g. #B392F0 instead of #6F42C1). Each
+ * span sets both vars inline, so \`!important\` is required here to
+ * override the inline-style specificity of those vars. */
+.typography pre .shiki span,
+.prose pre .shiki span {
+  --shiki-light: var(--shiki-dark) !important;
+}
+
+/* Every inner wrapper goes transparent and loses padding/border so the
+ * <pre>'s dark bg is the only visible layer. */
+.typography pre .code-block-wrapper,
+.prose pre .code-block-wrapper,
+.typography pre .code-block-wrapper .code-block,
+.prose pre .code-block-wrapper .code-block,
+.typography pre code.shiki,
+.prose pre code.shiki,
+.typography pre .shiki,
+.prose pre .shiki {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+/* Pull the language-label row out of flow and keep only the copy button. */
+.typography pre .code-block-wrapper > div:first-child,
+.prose pre .code-block-wrapper > div:first-child {
+  position: absolute !important;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  background: transparent !important;
+  width: auto !important;
+  pointer-events: none;
+}
+
+.typography pre .code-block-wrapper > div:first-child > div:first-child,
+.prose pre .code-block-wrapper > div:first-child > div:first-child {
+  display: none !important;
+}
+
+.typography pre .code-block-wrapper > div:first-child button,
+.prose pre .code-block-wrapper > div:first-child button {
+  pointer-events: auto;
+  color: rgba(226, 232, 240, 0.7) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.typography pre .code-block-wrapper > div:first-child button:hover,
+.prose pre .code-block-wrapper > div:first-child button:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+
+/* Hide every scrollbar on every inner container. Content that overflows
+ * horizontally is still scrollable via trackpad/touch; we just don't
+ * render the visible bar (which looked awful against the dark bg). */
+.typography pre,
+.prose pre,
+.typography pre .code-block,
+.prose pre .code-block,
+.typography pre code,
+.prose pre code,
+.typography pre .shiki,
+.prose pre .shiki {
+  scrollbar-width: none !important;
+}
+.typography pre::-webkit-scrollbar,
+.prose pre::-webkit-scrollbar,
+.typography pre .code-block::-webkit-scrollbar,
+.prose pre .code-block::-webkit-scrollbar,
+.typography pre code::-webkit-scrollbar,
+.prose pre code::-webkit-scrollbar,
+.typography pre .shiki::-webkit-scrollbar,
+.prose pre .shiki::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+} /* end @layer theme */
+
+.prose blockquote,
+.typography blockquote {
+  border-left: 3px solid var(--akg-primary-500);
+  padding-left: 1rem;
+  margin-left: 0;
+  margin-bottom: 1.25rem;
+  color: var(--akg-text-secondary);
+  font-style: italic;
+}
+
+.prose :where(table),
+.typography :where(table) {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+  font-size: 0.9375rem;
+}
+
+@media (min-width: 768px) {
+  .prose :where(table),
+  .typography :where(table) {
+    display: table;
+  }
+}
+
+.prose th,
+.typography th {
+  text-align: left;
+  font-weight: 600;
+  padding: 0.625rem 1rem;
+  border-bottom: 2px solid var(--akg-border);
+  color: var(--akg-text-heading);
+  white-space: nowrap;
+}
+
+.prose td,
+.typography td {
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--akg-border-light);
+}
+
+.prose tr:last-child td,
+.typography tr:last-child td {
+  border-bottom: none;
+}
+
+.prose hr,
+.typography hr {
+  border: none;
+  border-top: 1px solid var(--akg-border-light);
+  margin: 2rem 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Callouts — admonition-style blocks.
+ * Authored in markdown as :::tip / :::warning / :::danger, which Zudoku
+ * renders via its Admonition component. We also map directly-authored
+ * \`.callout\` divs in MDX to the same look.
+ * ------------------------------------------------------------------------- */
+
+.callout {
+  border-radius: 13px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9375rem;
+}
+
+.callout-tip {
+  background: var(--akg-callout-tip-bg);
+  border-left: 3px solid var(--akg-primary-500);
+}
+
+.callout-warning {
+  background: var(--akg-callout-warn-bg);
+  border-left: 3px solid #f59e0b;
+}
+
+.callout-danger {
+  background: var(--akg-callout-danger-bg);
+  border-left: 3px solid #ef4444;
+}
+
+/* ---------------------------------------------------------------------------
+ * KeyAnatomy — interactive specimen on the homepage.
+ * ------------------------------------------------------------------------- */
+
+.akg-key-anatomy {
+  border: 1px solid var(--akg-border);
+  background: var(--akg-bg);
+  border-radius: 20px;
+  padding: 1.5rem;
+}
+@media (min-width: 640px) {
+  .akg-key-anatomy {
+    padding: 2rem;
+  }
+}
+.dark .akg-key-anatomy {
+  border-color: var(--akg-border-light);
+}
+
+h2.akg-key-anatomy__title {
+  font-family: var(--akg-font-display);
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--akg-text-heading);
+  margin: 0 0 0.25rem 0;
+  padding: 0;
+  border: none;
+  letter-spacing: normal;
+}
+
+p.akg-key-anatomy__subtitle {
+  font-size: 0.875rem;
+  color: var(--akg-text-muted);
+  margin: 0 0 1.5rem 0;
+}
+
+.akg-key-segments {
+  display: flex;
+  align-items: center;
+  font-family: var(--akg-font-mono);
+  /* Font-size is set via Tailwind classes in the component (text-xs sm:text-sm
+   * md:text-base) to avoid Vite's lightningcss optimizer replacing responsive
+   * values with static ones. */
+}
+
+.akg-key-segment {
+  display: block;
+  text-align: center;
+  /* Padding set via Tailwind classes in the component for same reason. */
+  border: 1px solid;
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  font-family: var(--akg-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.akg-key-segment--prefix {
+  width: 22%;
+  flex-shrink: 0;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+  border-right: 0;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--akg-primary-600);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+.dark .akg-key-segment--prefix {
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--akg-primary-light);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.akg-key-segment--prefix:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+.dark .akg-key-segment--prefix:hover {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.akg-key-segment--payload {
+  flex: 1;
+  min-width: 0;
+  background: var(--akg-bg-secondary);
+  color: var(--akg-text);
+  border-top: 1px solid var(--akg-border);
+  border-bottom: 1px solid var(--akg-border);
+  border-left: 0;
+  border-right: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dark .akg-key-segment--payload {
+  background: rgba(25, 28, 36, 0.5);
+  border-color: var(--akg-border-light);
+}
+.akg-key-segment--payload:hover {
+  background: var(--akg-border-light);
+}
+.dark .akg-key-segment--payload:hover {
+  background: rgba(25, 28, 36, 1);
+}
+
+.akg-key-segment--checksum {
+  width: 16%;
+  flex-shrink: 0;
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+  border-left: 0;
+  background: var(--akg-bg-secondary);
+  color: var(--akg-text-secondary);
+  border-color: var(--akg-border);
+}
+.dark .akg-key-segment--checksum {
+  background: rgba(25, 28, 36, 0.5);
+  border-color: var(--akg-border-light);
+}
+
+.akg-key-segment[aria-expanded="true"] {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+}
+
+.akg-key-separator {
+  color: rgba(142, 142, 147, 0.4);
+  padding: 0.625rem 0;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.akg-key-labels {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 0.625rem;
+  font-family: var(--akg-font-sans);
+  /* Font-size set via Tailwind classes in the component. */
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.akg-key-label--prefix {
+  width: 22%;
+  flex-shrink: 0;
+  color: var(--akg-primary-600);
+}
+.dark .akg-key-label--prefix {
+  color: var(--akg-primary-light);
+}
+
+.akg-key-label--payload {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  color: var(--akg-text-muted);
+}
+
+.akg-key-label--checksum {
+  width: 16%;
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--akg-text-muted);
+}
+
+.akg-key-label-arrow {
+  display: inline-block;
+  margin-right: 0.125rem;
+  margin-top: -1px;
+}
+
+.akg-key-spacer {
+  flex-shrink: 0;
+  width: 0.625rem;
+}
+
+.akg-key-detail {
+  margin-top: 1.25rem;
+  border-radius: 12px;
+  border: 1px solid var(--akg-border);
+  background: rgba(240, 240, 240, 0.5);
+  padding: 1rem;
+  transition: opacity 0.15s ease;
+}
+.dark .akg-key-detail {
+  background: rgba(25, 28, 36, 0.2);
+  border-color: var(--akg-border-light);
+}
+
+.akg-key-detail__text {
+  font-size: 0.875rem;
+  color: var(--akg-text);
+  line-height: 1.6;
+}
+
+.akg-key-detail__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--akg-primary-600);
+  text-decoration: none;
+}
+.dark .akg-key-detail__link {
+  color: var(--akg-primary-light);
+}
+.akg-key-detail__link:hover {
+  text-decoration: underline;
+}
+.akg-key-detail__link:focus-visible {
+  outline: 2px solid var(--akg-primary-500);
+  outline-offset: 2px;
+}
+
+.akg-key-summary {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--akg-border-light);
+}
+.akg-key-summary p {
+  font-size: 0.875rem;
+  color: var(--akg-text-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+.akg-key-summary a {
+  color: var(--akg-primary-600);
+  text-decoration: none;
+  font-weight: 500;
+}
+.dark .akg-key-summary a {
+  color: var(--akg-primary-light);
+}
+.akg-key-summary a:hover {
+  text-decoration: underline;
+}
+
+/* Add breathing room between the section label ("Architecture", "Security",
+ * etc.) and the page title <h1> inside Zudoku's auto-generated header. */
+header.flow-root > div.text-primary {
+  margin-bottom: 0.625rem;
+}
+
+/* On the root intro doc we render our own hero title inside the MDX body.
+ * Zudoku auto-renders the frontmatter title as <h1 id="what-are-api-keys">
+ * plus its surrounding <header class="flow-root"> (which also hosts the
+ * "Copy page" action group). Hide the whole auto header on this page, and
+ * keep it everywhere else unchanged. The slug \`what-are-api-keys\` is unique
+ * to this page, so targeting via the id is safe. */
+header.flow-root:has(> h1#what-are-api-keys) {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Homepage hero (intro text + subtitle above KeyAnatomy)
+ * ------------------------------------------------------------------------- */
+
+.akg-hero-title {
+  font-family: var(--akg-font-display);
+  font-size: 3rem;
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--akg-text-heading);
+  margin: 0 0 1rem 0;
+}
+@media (min-width: 640px) {
+  .akg-hero-title {
+    font-size: 4.5rem;
+  }
+}
+@media (min-width: 1024px) {
+  .akg-hero-title {
+    font-size: 5rem;
+  }
+}
+
+.akg-hero-lede {
+  font-family: var(--akg-font-display);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--akg-text-secondary);
+  margin: 0 0 0.5rem 0;
+}
+@media (min-width: 640px) {
+  .akg-hero-lede {
+    font-size: 1.5rem;
+  }
+}
+
+.akg-hero-sub {
+  max-width: 36rem;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--akg-text-secondary);
+  margin: 0 0 2rem 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Section grid (below the intro doc)
+ * ------------------------------------------------------------------------- */
+
+.akg-section-grid {
+  margin-top: 3rem;
+  border-top: 1px solid var(--akg-border-light);
+  padding-top: 2.5rem;
+}
+
+.akg-section-grid__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+h2.akg-section-grid__title {
+  font-family: var(--akg-font-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--akg-text-heading);
+  margin: 0;
+  padding: 0;
+  border: none;
+  letter-spacing: normal;
+}
+
+p.akg-section-grid__subtitle {
+  font-size: 0.875rem;
+  color: var(--akg-text-muted);
+  margin: 0.25rem 0 0 0;
+}
+
+.akg-section-grid__count {
+  display: inline-flex;
+  align-items: center;
+  background: var(--akg-bg-secondary);
+  color: var(--akg-text-muted);
+  border-radius: 9999px;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-bottom: 0.125rem;
+}
+.dark .akg-section-grid__count {
+  background: rgba(25, 28, 36, 0.5);
+}
+
+.akg-section-grid__featured {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+@media (min-width: 640px) {
+  .akg-section-grid__featured {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.akg-section-grid__standard {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 640px) {
+  .akg-section-grid__standard {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.akg-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--akg-border);
+  background: var(--akg-bg);
+  padding: 1.25rem 1.5rem;
+  text-decoration: none !important;
+  color: inherit !important;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dark .akg-card {
+  border-color: var(--akg-border-light);
+}
+.akg-card:hover {
+  box-shadow: var(--akg-shadow-subtle);
+}
+.akg-card:focus-visible {
+  outline: 2px solid var(--akg-primary-500);
+  outline-offset: 2px;
+}
+
+.akg-card--featured {
+  padding: 1.5rem 1.75rem;
+}
+
+.akg-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.akg-card--featured .akg-card__header {
+  margin-bottom: 0.75rem;
+}
+
+.akg-card__icon {
+  display: flex;
+  height: 2rem;
+  width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.akg-card--featured .akg-card__icon {
+  height: 2.25rem;
+  width: 2.25rem;
+  border-radius: 8px;
+}
+
+h3.akg-card__title {
+  font-family: var(--akg-font-display);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--akg-text-heading);
+  margin: 0;
+  transition: color 0.15s ease;
+  text-decoration: none;
+}
+.akg-card:hover .akg-card__title {
+  color: var(--akg-primary-600);
+}
+
+.akg-card__count {
+  margin-left: auto;
+  flex-shrink: 0;
+  align-self: center;
+  background: var(--akg-bg-secondary);
+  color: var(--akg-text-muted);
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+.dark .akg-card__count {
+  background: rgba(25, 28, 36, 0.5);
+}
+
+.akg-card__badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+}
+
+p.akg-card__description {
+  font-size: 0.8125rem;
+  color: var(--akg-text-muted);
+  line-height: 1.6;
+  flex: 1;
+  margin: 0 0 0 2.75rem;
+  text-decoration: none;
+}
+
+.akg-card--featured .akg-card__description {
+  margin-left: 0;
+  margin-bottom: 0.75rem;
+}
+
+.akg-card__cta {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--akg-primary-600);
+}
+.dark .akg-card__cta {
+  color: var(--akg-primary-light);
+}
+
+.akg-card__cta > span {
+  text-decoration: none;
+}
+.akg-card:hover .akg-card__cta > span {
+  text-decoration: none;
+}
+
+.akg-card--featured-blue {
+  border-color: rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.04);
+}
+.dark .akg-card--featured-blue {
+  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.08);
+}
+.akg-card--featured-blue:hover {
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.akg-card:hover .akg-card__arrow {
+  color: var(--akg-text-muted);
+}
+.akg-card__arrow {
+  color: transparent;
+  transition: color 0.15s ease;
+  flex-shrink: 0;
+}
+
+/* Colour variants for the "stripe + icon background" per section */
+.akg-accent-blue { color: var(--akg-primary-600); }
+.dark .akg-accent-blue { color: var(--akg-primary-light); }
+.akg-accent-blue .akg-card__icon { background: rgba(59, 130, 246, 0.1); }
+.dark .akg-accent-blue .akg-card__icon { background: rgba(59, 130, 246, 0.2); }
+
+.akg-accent-red { color: #dc2626; }
+.dark .akg-accent-red { color: #f87171; }
+.akg-accent-red .akg-card__icon { background: rgba(239, 68, 68, 0.1); }
+.dark .akg-accent-red .akg-card__icon { background: rgba(239, 68, 68, 0.15); }
+.akg-accent-red:hover { border-color: rgba(248, 113, 113, 0.3); }
+
+.akg-accent-amber { color: #d97706; }
+.dark .akg-accent-amber { color: #fbbf24; }
+.akg-accent-amber .akg-card__icon { background: rgba(245, 158, 11, 0.1); }
+.dark .akg-accent-amber .akg-card__icon { background: rgba(245, 158, 11, 0.15); }
+.akg-accent-amber:hover { border-color: rgba(251, 191, 36, 0.3); }
+
+.akg-accent-emerald { color: #059669; }
+.dark .akg-accent-emerald { color: #34d399; }
+.akg-accent-emerald .akg-card__icon { background: rgba(16, 185, 129, 0.1); }
+.dark .akg-accent-emerald .akg-card__icon { background: rgba(16, 185, 129, 0.15); }
+.akg-accent-emerald:hover { border-color: rgba(52, 211, 153, 0.3); }
+
+.akg-accent-violet { color: #7c3aed; }
+.dark .akg-accent-violet { color: #a78bfa; }
+.akg-accent-violet .akg-card__icon { background: rgba(124, 58, 237, 0.1); }
+.dark .akg-accent-violet .akg-card__icon { background: rgba(124, 58, 237, 0.15); }
+.akg-accent-violet:hover { border-color: rgba(167, 139, 250, 0.3); }
+
+.akg-card--continue .akg-card__badge,
+.akg-card--new .akg-card__badge {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--akg-primary-600);
+}
+.dark .akg-card--continue .akg-card__badge,
+.dark .akg-card--new .akg-card__badge {
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--akg-primary-light);
+}
+.akg-card--new .akg-card__badge {
+  background: var(--akg-primary-500);
+  color: #ffffff;
+}
+.dark .akg-card--new .akg-card__badge {
+  background: var(--akg-primary-500);
+  color: #ffffff;
+}
+
+/* ---------------------------------------------------------------------------
+ * Open-source CTA block
+ * ------------------------------------------------------------------------- */
+
+.akg-cta {
+  margin-top: 2.5rem;
+  position: relative;
+  border-radius: 20px;
+  border: 1px solid var(--akg-border);
+  background: rgba(240, 240, 240, 0.5);
+  padding: 1.5rem;
+}
+.dark .akg-cta {
+  border-color: var(--akg-border-light);
+  background: rgba(25, 28, 36, 0.2);
+}
+@media (min-width: 640px) {
+  .akg-cta {
+    padding: 2rem;
+  }
+}
+
+.akg-cta__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+@media (min-width: 640px) {
+  .akg-cta__inner {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+.akg-cta__body {
+  flex: 1;
+}
+
+.akg-cta__head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.akg-cta__badge {
+  display: flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--akg-text-charcoal);
+  color: #ffffff;
+}
+.dark .akg-cta__badge {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+h2.akg-cta__title {
+  font-family: var(--akg-font-display);
+  font-size: 1.125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--akg-text-heading);
+  margin: 0;
+  padding: 0;
+  border: none;
+  letter-spacing: normal;
+}
+
+p.akg-cta__tagline {
+  font-size: 0.75rem;
+  color: var(--akg-text-muted);
+  margin: 0;
+}
+
+p.akg-cta__description {
+  font-size: 0.875rem;
+  color: var(--akg-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+  max-width: 28rem;
+}
+
+.akg-cta__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  flex-shrink: 0;
+}
+
+.akg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 8px;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.akg-btn:focus-visible {
+  outline: 2px solid var(--akg-primary-500);
+  outline-offset: 2px;
+}
+
+.akg-btn--primary,
+.akg-btn--secondary {
+  text-decoration: none;
+}
+
+.akg-btn--primary {
+  background: var(--akg-text-charcoal);
+  color: #ffffff !important;
+}
+.akg-btn--primary:hover {
+  background: var(--akg-text-heading);
+  color: #ffffff !important;
+}
+.dark .akg-btn--primary {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff !important;
+}
+.dark .akg-btn--primary:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff !important;
+}
+
+.akg-btn--secondary {
+  border: 1px solid var(--akg-border);
+  background: var(--akg-bg);
+  color: var(--akg-text-secondary) !important;
+  font-weight: 500;
+}
+.dark .akg-btn--secondary {
+  border-color: var(--akg-border-light);
+  color: var(--akg-text-secondary) !important;
+}
+.akg-btn--secondary:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--akg-text-heading) !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Footer — dark bg with the branding column rendered via the
+ * \`footer-before\` slot laid out as a sibling of Zudoku's column grid.
+ *
+ * Zudoku renders:
+ *   <footer class="border-t bg-background">
+ *     <div class="mx-auto ... px-4 lg:px-8 py-8 pt-20">
+ *       <div class="flex flex-row gap-8 justify-center">
+ *         [footer-before slot]                  ← our FooterBranding
+ *         <div class="... md:max-w-3xl grid ... style --columns:N">
+ *           [column 1] [column 2] [column 3]    ← Zudoku columns
+ *         </div>
+ *         [footer-after slot]
+ *       </div>
+ *       <div class="... border-t mt-8 pt-8">
+ *         [copyright]                           [social icons]
+ *       </div>
+ *     </div>
+ *   </footer>
+ *
+ * Override the background, text colors, and split the layout into a 4-up
+ * grid where our branding column sits to the left of Zudoku's columns.
+ * ------------------------------------------------------------------------- */
+
+footer.border-t {
+  background: var(--akg-dark-surface) !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+  border-top-color: transparent !important;
+}
+
+/* Give the main footer row a 4-column grid: branding is one column, and
+ * Zudoku's existing 3-column grid takes the remaining three columns. */
+footer.border-t > div > div:first-child {
+  flex-wrap: wrap !important;
+  justify-content: flex-start !important;
+  align-items: flex-start !important;
+}
+@media (min-width: 768px) {
+  footer.border-t > div > div:first-child {
+    display: grid !important;
+    grid-template-columns: minmax(240px, 1fr) 3fr !important;
+    gap: 3rem !important;
+  }
+}
+
+/* Zudoku's own column grid -- inside the second child of the row. Override
+ * the inline --columns var so it renders as 3 visible columns always. */
+footer.border-t > div > div:first-child > div:nth-child(2) {
+  max-width: none !important;
+}
+
+footer.border-t span[class*="font-semibold"] {
+  color: rgba(255, 255, 255, 0.6) !important;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+footer.border-t a {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+footer.border-t a:hover {
+  color: #ffffff !important;
+}
+
+footer.border-t svg {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Copyright + social row at bottom */
+footer.border-t > div > div:nth-child(2) {
+  border-top-color: rgba(255, 255, 255, 0.1) !important;
+}
+footer.border-t p.text-sm {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Invert the GitHub icon (Simple Icons CDN serves a dark-on-light variant
+ * by default; the icon URL Zudoku uses already embeds the color so we just
+ * tune its opacity). */
+footer.border-t img[alt="github"] {
+  filter: brightness(0) invert(1);
+  opacity: 0.7;
+}
+footer.border-t img[alt="github"]:hover {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * FooterBranding component (injected via footer-before slot)
+ * ------------------------------------------------------------------------- */
+
+.akg-footer-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 18rem;
+}
+
+.akg-footer-brand__header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.akg-footer-brand__icon {
+  display: flex;
+  height: 2rem;
+  width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.akg-footer-brand__title {
+  font-family: var(--akg-font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.akg-footer-brand__tagline {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0;
+}
+
+/* Replace the "Zuplo" text label in the footer's "Supported by" column with
+ * the actual wordmark. We hide the <span> inside the zuplo anchor and render
+ * the mask-image logo via ::before on the anchor itself. */
+footer.border-t a[href*="zuplo.com"] > span {
+  display: none;
+}
+footer.border-t a[href*="zuplo.com"] {
+  align-items: center;
+  gap: 0.375rem;
+}
+footer.border-t a[href*="zuplo.com"] svg {
+  display: none;
+}
+footer.border-t a[href*="zuplo.com"]::before {
+  content: "";
+  display: inline-block;
+  width: 72px;
+  height: 20px;
+  background: currentColor;
+  -webkit-mask-image: url("/zuplo-logo.svg");
+  mask-image: url("/zuplo-logo.svg");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: left center;
+  mask-position: left center;
+}
+
+/* ------------------------------------------------------------------ */
+/*  YouTubeEmbed                                                      */
+/* ------------------------------------------------------------------ */
+
+.akg-video {
+  margin-top: 2.5rem;
+  border-radius: 20px;
+  border: 1px solid var(--akg-border);
+  overflow: hidden;
+  background: #000;
+}
+
+.akg-video iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  "Updated {month year}" stamp                                      */
+/*                                                                    */
+/*  Injected into every doc by scripts/gen-doc-meta.cjs, sourced from */
+/*  frontmatter dateModified. Rendered on its own line, visually      */
+/*  subdued but still extractable by crawlers that read rendered text.*/
+/* ------------------------------------------------------------------ */
+
+.akg-updated {
+  display: inline-block;
+  margin: 0 0 1.5rem 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--akg-border);
+  border-radius: 999px;
+  font-family: var(--akg-font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--akg-muted-fg, #45515e);
+  background: var(--akg-muted, #f0f0f0);
+}
+
+.dark .akg-updated {
+  color: #9ca3af;
+  background: #191c24;
+  border-color: #2a2e3a;
+}
+
+/* ------------------------------------------------------------------ */
+/*  FAQ component                                                     */
+/* ------------------------------------------------------------------ */
+
+.akg-faq {
+  margin: 1.5rem 0 2.5rem;
+}
+
+.akg-faq__item {
+  border-bottom: 1px solid var(--akg-border);
+}
+
+.akg-faq__item:first-of-type {
+  border-top: 1px solid var(--akg-border);
+}
+
+.akg-faq__q {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0;
+  padding: 0.9rem 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--akg-fg, #222);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.akg-faq__q::-webkit-details-marker {
+  display: none;
+}
+
+.akg-faq__q::after {
+  content: "";
+  flex-shrink: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  opacity: 0.5;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+  margin-right: 0.35rem;
+}
+
+.akg-faq__item[open] > .akg-faq__q::after {
+  transform: translateY(2px) rotate(-135deg);
+  opacity: 0.85;
+}
+
+.akg-faq__q:hover {
+  color: var(--akg-brand-blue, #1456f0);
+}
+
+.dark .akg-faq__q {
+  color: #e2e4e9;
+}
+
+.akg-faq__a {
+  margin: 0;
+  padding: 0 0.25rem 1.1rem;
+  color: var(--akg-muted-fg, #45515e);
+  line-height: 1.6;
+  font-size: 0.95rem;
+}
+
+.dark .akg-faq__a {
+  color: #c9cdd4;
+}
+
+.akg-faq__a > :first-child {
+  margin-top: 0;
+}
+
+.akg-faq__a > :last-child {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  HowTo component                                                   */
+/* ------------------------------------------------------------------ */
+
+.akg-howto {
+  margin: 2rem 0;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--akg-border);
+  border-radius: 12px;
+  background: var(--akg-muted, #f6f7f9);
+}
+
+.dark .akg-howto {
+  background: #141822;
+}
+
+.akg-howto__title {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.akg-howto__steps {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.akg-howto__steps li {
+  margin-bottom: 0.5rem;
+  line-height: 1.5;
+}
+
+.akg-howto__steps li strong {
+  display: block;
+  margin-bottom: 0.1rem;
+}
+
+/* ------------------------------------------------------------------ */
+/*  TLDR component                                                    */
+/*                                                                    */
+/*  Top-of-page summary callout. Replaces the \`## TL;DR\` h2 + bullet  */
+/*  pattern so the frontmatter-rendered <h1> isn't immediately        */
+/*  followed by a competing heading.                                  */
+/* ------------------------------------------------------------------ */
+
+.akg-tldr {
+  margin: 0 0 2rem 0;
+  padding: 1rem 1.25rem 0.875rem 1.25rem;
+  border: 1px solid var(--akg-border);
+  border-radius: 13px;
+  background: var(--akg-callout-tip-bg);
+}
+
+.dark .akg-tldr {
+  border-color: var(--akg-border-light);
+}
+
+.akg-tldr__label {
+  margin: 0 0 0.625rem 0;
+  font-family: var(--akg-font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--akg-primary-600);
+}
+
+.dark .akg-tldr__label {
+  color: var(--akg-primary-light);
+}
+
+.akg-tldr__body > :first-child {
+  margin-top: 0;
+}
+
+.akg-tldr__body > :last-child {
+  margin-bottom: 0;
+}
+
+.akg-tldr__body ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.akg-tldr__body li {
+  margin-bottom: 0.375rem;
+  line-height: 1.55;
+  font-size: 0.9375rem;
+}
+
+.akg-tldr__body li:last-child {
+  margin-bottom: 0;
+}
+
+.akg-tldr__body a {
+  color: var(--akg-primary-600);
+}
+
+.dark .akg-tldr__body a {
+  color: var(--akg-primary-light);
+}
+`;

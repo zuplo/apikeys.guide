@@ -1,0 +1,177 @@
+---
+title: "Validation & Lookup"
+description: "Patterns for validating and looking up API keys efficiently, including hashed storage, timing-safe comparison, caching, and middleware design."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Never store the raw key. Store a SHA-256 hash and look up by hash. This gives O(1) validation and means a database breach exposes no usable credentials.
+- Return an identical error response for unknown, revoked, and expired keys. Divergent errors let attackers enumerate valid keys.
+- Use constant-time comparison (`timingSafeEqual`) whenever you compare two credential-derived values, to close the timing side channel described in CWE-208.
+- Cache the hash-to-record mapping with a short TTL (30–300s) and invalidate on revocation. Negatively cache invalid keys so repeated bad requests don't hammer your database.
+- Use the [key prefix](/docs/implementation/key-formats-and-prefixes) to route to the correct validation backend before you hash. This is also what makes zero-downtime key-system migrations possible.
+
+</TLDR>
+
+## Never Store Keys in Plain Text
+
+The first rule of API key validation is that you should never store the raw key in your database. Instead, store a [cryptographic hash of the key](/docs/security/hashing-and-storage) and compare against that hash at request time. This way, a database breach does not directly expose usable credentials.
+
+Use a fast, non-reversible hash like SHA-256. Unlike passwords, API keys are high-entropy random strings, so you do not need a slow hash like bcrypt. There is nothing to brute-force when the input space is 2^128 or larger.
+
+```javascript
+import { createHash, timingSafeEqual } from "node:crypto";
+
+function hashKey(apiKey) {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+```
+
+When a key is created, store `hashKey(rawKey)` in the database. When a request comes in, hash the presented key and look up the hash.
+
+## O(1) Lookup with Hashed Keys
+
+A naive approach (iterating through all keys and comparing) is O(n) and does not scale. Instead, index the hash column in your database and perform a direct lookup:
+
+```sql
+SELECT user_id, scopes, rate_limit
+FROM api_keys
+WHERE key_hash = $1 AND revoked_at IS NULL;
+```
+
+This gives you O(1) lookup (via B-tree or hash index) and ensures that revoked keys are excluded in the same query. The hash is deterministic, so the same key always produces the same hash, making indexed lookups straightforward.
+
+## Prefix-Based Routing
+
+If your system has multiple authentication backends (e.g., different services or key versions), the [key prefix](/docs/implementation/key-formats-and-prefixes) can route requests before you even hash the key:
+
+```javascript
+function getAuthBackend(apiKey) {
+  if (apiKey.startsWith("v2_sk_")) return authBackendV2;
+  if (apiKey.startsWith("sk_")) return authBackendV1;
+  return null; // Unknown key format
+}
+```
+
+This is useful during key migrations. You can run two authentication systems in parallel, routing old keys to the legacy backend and new keys to the current one, with zero downtime.
+
+## Validation Middleware
+
+A well-structured validation middleware handles extraction, structural validation, lookup, and error responses in a clean pipeline. Here is an example for an Express-style HTTP server:
+
+```javascript
+import { createHash, timingSafeEqual } from "node:crypto";
+
+async function apiKeyAuth(req, res, next) {
+  // 1. Extract the key
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing API key" });
+  }
+  const apiKey = authHeader.slice(7);
+
+  // 2. Structural validation (optional, if using checksums)
+  if (!isStructurallyValid(apiKey)) {
+    return res.status(401).json({ error: "Invalid API key format" });
+  }
+
+  // 3. Hash and look up
+  const keyHash = createHash("sha256").update(apiKey).digest("hex");
+  const record = await db.query(
+    "SELECT * FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+    [keyHash]
+  );
+
+  if (!record) {
+    return res.status(401).json({ error: "Invalid API key" });
+  }
+
+  // 4. Attach identity to request
+  req.apiKeyRecord = record;
+  next();
+}
+```
+
+### Important: Consistent Error Messages
+
+Return the same error message and status code for "key not found" and "key revoked." If you return different responses, an attacker can enumerate which keys exist (and which have been revoked) by observing the response differences.
+
+## Timing-Safe Comparison
+
+When comparing secrets, use a constant-time comparison function to prevent timing attacks. A standard string equality check (`===`) short-circuits on the first mismatched byte, leaking information about how many leading bytes are correct.
+
+```javascript
+function safeCompare(a, b) {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+```
+
+In practice, if you are hashing the key and looking it up by hash, timing attacks on the comparison itself are less of a concern because the hash lookup is either a hit or a miss. But if you ever compare raw key values directly (e.g., in a cache layer), always use constant-time comparison.
+
+## Caching Strategies
+
+Database lookups on every request add latency. A cache layer can reduce this significantly, but must be designed carefully:
+
+- **Cache the hash-to-record mapping**, not the raw key. The cache key should be the SHA-256 hash.
+- **Set a short TTL** (30 to 300 seconds). This bounds how long a revoked key remains usable.
+- **Invalidate on revocation.** When a key is revoked, actively evict it from the cache rather than waiting for TTL expiry.
+- **Use a read-through pattern.** On cache miss, query the database, populate the cache, and return the result.
+- **Negatively cache invalid keys.** When a lookup returns no result, cache that fact with a shorter TTL (30 to 60 seconds). This prevents a client sending the same bad key from hitting your database on every request. Without negative caching, an attacker can generate load on your database by repeatedly sending invalid keys.
+
+```javascript
+async function lookupKey(keyHash) {
+  const cached = await cache.get(`apikey:${keyHash}`);
+  if (cached) {
+    const parsed = JSON.parse(cached);
+    return parsed.rejected ? null : parsed;
+  }
+
+  const record = await db.query(
+    "SELECT * FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+    [keyHash]
+  );
+
+  if (record) {
+    await cache.set(`apikey:${keyHash}`, JSON.stringify(record), "EX", 120);
+  } else {
+    // Negative cache: remember this key is invalid so repeat
+    // requests get a fast 401 without hitting the database
+    await cache.set(
+      `apikey:${keyHash}`,
+      JSON.stringify({ rejected: true }),
+      "EX",
+      60,
+    );
+  }
+
+  return record;
+}
+```
+
+In practice, the cache layer is usually Redis, Memcached, or a runtime-local store like Cloudflare Workers KV or an in-memory LRU inside the validator. Teams who don't want to run the cache themselves tend to offload the whole validate-and-cache path to their API gateway — Kong's key-auth plugin, Tyk's keyless cache, and managed gateways like Zuplo all handle hashed lookup, caching, and revocation invalidation for you. [Zuplo's API Key Authentication policy docs](https://zuplo.com/docs/policies/api-key-inbound?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) cover the cache TTL and revocation propagation in detail.
+
+## Handling Invalid Keys Gracefully
+
+Your API should handle invalid keys without leaking information or creating denial-of-service vectors:
+
+- **Do not reveal whether the key exists.** A 401 response should be identical whether the key is unknown, revoked, or expired.
+- **[Rate-limit](/docs/security/rate-limiting) authentication failures** by IP address to prevent brute-force enumeration.
+- **Log failed attempts** with enough metadata (IP, timestamp, key prefix if available) to support incident investigation, but never log the full key.
+- **Return standard error shapes** that clients can parse programmatically, not free-text error messages that change between releases.
+
+## References
+
+- [CWE-208: Observable Timing Discrepancy](https://cwe.mitre.org/data/definitions/208.html): the timing side channel that motivates constant-time comparison.
+- [CWE-312: Cleartext Storage of Sensitive Information](https://cwe.mitre.org/data/definitions/312.html): why raw keys belong nowhere in your data store.
+- [CWE-204: Observable Response Discrepancy](https://cwe.mitre.org/data/definitions/204.html): the class of vulnerability caused by divergent error responses for unknown vs. revoked keys.
+- [FIPS 180-4: Secure Hash Standard (SHS)](https://csrc.nist.gov/pubs/fips/180-4/final): specification for SHA-256, the hash function used for lookup.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): common failure modes in the validation path.
+- [OWASP Authentication Cheat Sheet: Error messages](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html#authentication-and-error-messages): authoritative guidance on the "same error for all failure modes" rule.
+- [Node.js `crypto.timingSafeEqual`](https://nodejs.org/api/crypto.html#cryptotimingsafeequala-b): the constant-time comparison API used in the examples on this page.

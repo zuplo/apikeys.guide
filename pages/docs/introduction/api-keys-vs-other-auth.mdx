@@ -1,0 +1,112 @@
+---
+title: "API Keys vs Other Auth Methods"
+description: "A detailed comparison of API keys against OAuth 2.0, JWTs, Basic Auth, and mTLS: when each method shines and where it falls short."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- API keys identify an application or account; OAuth 2.0 identifies a user via delegated consent; JWTs carry self-describing claims.
+- API keys win on simplicity and instant revocation; JWTs win on stateless validation; OAuth wins on user-scoped access; mTLS wins on mutual identity guarantees.
+- Basic Auth (RFC 7617) is easy but ties credentials to the user's password and is a poor fit for production APIs.
+- Most mature platforms combine methods: API keys for application identity and billing, OAuth/JWT for user operations, mTLS for internal service-to-service calls.
+- Pick by question, not by fashion: "which app made this call?" is an API key question; "what is this user allowed to do?" is an OAuth question.
+
+</TLDR>
+
+## The Authentication Landscape
+
+No single authentication method is right for every situation. API keys, OAuth 2.0, JWTs, Basic Auth, and mTLS each solve different problems and carry different trade-offs. Understanding these distinctions is essential for choosing the right approach (or the right combination) for your API.
+
+## Comparison Table
+
+| | API Keys | OAuth 2.0 | JWTs | Basic Auth | mTLS |
+| --- | --- | --- | --- | --- | --- |
+| **Identifies** | Application / account | User (via delegated consent) | Bearer of the token | User (username + password) | Client certificate holder |
+| **Complexity** | Low | High | Medium | Very low | High |
+| **User delegation** | No | Yes | Depends on issuer | No | No |
+| **Stateless validation** | No (requires lookup) | Depends on token format | Yes (signature check) | No (requires lookup) | Yes (certificate chain) |
+| **Revocation** | Instant (delete from store) | Token + refresh revocation | Difficult (until expiry) | Change password | Revoke certificate (CRL/OCSP) |
+| **Best suited for** | Server-to-server, metering | User-facing apps, third-party access | Microservices, short-lived auth | Internal tools, simple scripts | Zero-trust, infrastructure |
+
+## API Keys vs OAuth 2.0
+
+OAuth 2.0 is designed for **delegated authorization**: it lets a user grant a third-party application limited access to their resources without sharing their password. API keys, by contrast, identify the calling _application_ rather than the end user.
+
+If you are building a public API where developers authenticate their own servers, API keys are simpler and more appropriate. If your API needs to act on behalf of individual users (e.g., "read this user's calendar"), OAuth 2.0 is the right tool. Many platforms use both: API keys for account-level access and billing, OAuth tokens for user-level operations.
+
+**Key trade-off:** OAuth 2.0 adds significant implementation complexity (authorization servers, token endpoints, refresh flows, consent screens) in exchange for fine-grained, user-scoped access control.
+
+## API Keys vs JWTs
+
+A JSON Web Token (JWT) is a signed, self-contained token that carries claims (like user ID, roles, and expiration) directly in its payload. Because the server can validate a JWT by checking its signature without hitting a database, JWTs enable **stateless authentication**.
+
+API keys require a [server-side lookup](/docs/implementation/validation-and-lookup) on every request, but this also means they can be **[revoked instantly](/docs/security/revocation)** by deleting the key from your data store. Revoking a JWT, on the other hand, is notoriously difficult. Since JWTs are validated locally, a compromised token remains valid until it expires unless you build additional infrastructure (token blocklists, short expiration windows, or forced re-issuance).
+
+**Key trade-off:** JWTs offer lower validation latency and no shared state between services; API keys offer immediate revocability and simpler issuance.
+
+## API Keys vs Basic Auth
+
+Basic Authentication transmits a username and password encoded in Base64 with every request. It is the simplest possible authentication scheme and is built into the HTTP specification.
+
+The problem is that Basic Auth sends credentials in a reversible encoding (not encryption) on every request, increasing exposure risk. It also ties authentication to a user's actual password, meaning a compromised Basic Auth header compromises the account itself. API keys, being independently generated secrets, can be rotated or revoked without changing a user's login credentials.
+
+**Key trade-off:** Basic Auth requires zero setup but offers poor security posture for production APIs. API keys are nearly as simple to implement but provide much better operational control.
+
+## API Keys vs mTLS
+
+Mutual TLS (mTLS) authenticates both sides of a connection using X.509 certificates. The client presents a certificate during the TLS handshake, and the server validates it against a trusted certificate authority. This happens at the transport layer, before any HTTP request is even processed.
+
+mTLS provides the strongest identity guarantees of any method on this list, but it comes with significant operational overhead: certificate provisioning, rotation, revocation lists, and managing a PKI (Public Key Infrastructure). It is most common in zero-trust architectures, service meshes, and infrastructure-level communication.
+
+**Key trade-off:** mTLS provides cryptographically strong mutual authentication at the cost of substantial operational complexity. API keys are far simpler to manage but rely on the secrecy of a shared string.
+
+## Combining Methods
+
+In practice, many APIs layer multiple authentication methods. A common pattern is:
+
+- **API keys** for application identification, rate limiting, and billing
+- **OAuth 2.0 or JWTs** for user-level authorization on endpoints that act on behalf of a user
+- **mTLS** for service-to-service communication within an internal network
+
+The right choice depends on what you are protecting, who your consumers are, and how much operational complexity you are willing to take on. The page on [when to use API keys](/docs/introduction/when-to-use-api-keys) will help you determine when API keys alone are sufficient and when you should reach for something more.
+
+## Frequently Asked Questions
+
+<FAQ
+  items={[
+    {
+      q: "When should I use API keys instead of OAuth 2.0?",
+      a: "Use API keys when you only need to know which application or account is calling, and the client is server-side (no end user in the loop). Reach for OAuth 2.0 when you need user-scoped authorization, for example letting a third-party app read one user's data with that user's explicit consent.",
+    },
+    {
+      q: "Are JWTs a replacement for API keys?",
+      a: "No. JWTs are a token format, not an identity primitive. A JWT can encode 'this is user 42 until 3pm' and be verified without a database lookup, but it is hard to revoke before expiry. API keys require a lookup but can be revoked instantly. Many systems use both: long-lived API keys for account identity, short-lived JWTs for per-request authorization.",
+    },
+    {
+      q: "Why is Basic Auth a bad fit for production APIs?",
+      a: "Basic Auth (RFC 7617) ties every request to a username and password, so rotation means changing a password that humans also use. It also encourages transmitting long-lived passwords on every call and offers no standard way to scope or revoke access. API keys separate machine credentials from human ones and fix every one of those problems.",
+    },
+    {
+      q: "Can I combine API keys with OAuth or JWTs?",
+      a: "Yes, and mature platforms usually do. A common pattern is API keys for application identity and billing, OAuth for user-scoped operations, and short-lived JWTs for internal service-to-service calls. The key is making sure each layer answers a different question (who is the app? who is the user? what is this specific call allowed to do?).",
+    },
+    {
+      q: "Is mTLS better than API keys?",
+      a: "mTLS provides stronger identity guarantees because both sides present certificates signed by a trusted CA, but it requires certificate distribution, rotation, and validation infrastructure that most public APIs cannot reasonably impose on their consumers. mTLS is an excellent fit for internal service-to-service auth; API keys remain the pragmatic choice for external developers.",
+    },
+  ]}
+/>
+
+## References
+
+- [RFC 6749: OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749): the delegated-authorization protocol contrasted here.
+- [RFC 6750: OAuth 2.0 Bearer Token Usage](https://datatracker.ietf.org/doc/html/rfc6750): how bearer credentials (keys and OAuth tokens alike) are presented on the wire.
+- [RFC 7519: JSON Web Token (JWT)](https://datatracker.ietf.org/doc/html/rfc7519) and [RFC 8725: JWT Best Current Practices](https://datatracker.ietf.org/doc/html/rfc8725): the JWT structure and the pitfalls that make revocation hard.
+- [RFC 7617: The 'Basic' HTTP Authentication Scheme](https://datatracker.ietf.org/doc/html/rfc7617): specification for Basic Auth, included here so you can see exactly what you are opting out of.
+- [RFC 2104: HMAC: Keyed-Hashing for Message Authentication](https://datatracker.ietf.org/doc/html/rfc2104): the construction behind signed request schemes and JWT HS256.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the mistakes that cut across every method on this page.
+- [NIST SP 800-63B: Digital Identity Guidelines](https://pages.nist.gov/800-63-3/sp800-63b.html): authoritative reference on authenticator assurance levels.

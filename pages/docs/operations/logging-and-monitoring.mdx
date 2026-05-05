@@ -1,0 +1,134 @@
+---
+title: "Logging & Monitoring"
+description: "How to effectively log and monitor API key usage, detect anomalies, mask sensitive data in logs, and meet compliance requirements."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+Effective logging and monitoring are essential for maintaining the security and reliability of any API key-based authentication system. Done well, they give you visibility into how keys are used, early warning of abuse, and an audit trail for compliance. Done poorly, they can become a liability, especially if full key values end up in your logs.
+
+<TLDR>
+
+- Log enough context to reconstruct any request (key identifier, timestamp, method, path, status, IP, latency) but never the full key, never request/response bodies that may contain secrets.
+- Mask keys before they reach the logging pipeline. Enforce masking at application middleware, not at each caller. Individual developers will forget.
+- Alert on the anomalies that correspond to compromise: sustained 401 spikes, geographically dispersed requests on a single key, sudden volume surges, traffic to endpoints outside the key's usual pattern.
+- Dashboards should cover both operations (auth failure rate, latency P95/P99) and product (top-N active keys, per-endpoint volume, geographic distribution).
+- Retention, access controls, immutability, and data residency are compliance requirements under SOC 2, PCI DSS, HIPAA, and GDPR. Build for them from day one, not during your first audit.
+
+</TLDR>
+
+## What to Log
+
+Every authenticated API request should generate a log entry that captures enough context for debugging and security analysis, without exposing secrets.
+
+**For every request, log:**
+- A key identifier (key ID or last four characters), never the full key
+- The timestamp in UTC
+- The HTTP method and request path
+- The response status code
+- The originating IP address
+- Latency / response time
+
+**For authentication-specific events, log:**
+- Successful and failed authentication attempts
+- Key creation, [rotation](/docs/security/key-rotation), and [revocation](/docs/security/revocation) events
+- Scope or permission changes
+- [Rate limit](/docs/security/rate-limiting) hits (429 responses)
+- Requests made with expired or revoked keys
+
+These events form the backbone of your security audit trail. If an incident occurs, they allow you to reconstruct what happened and when.
+
+If authentication happens at an [API gateway](/docs/architecture/gateway-based-authentication), most of this is captured for you. Gateways such as Kong, Apigee, Tyk, and Zuplo emit structured request logs that include the consumer identity, method, path, status, latency, and rate-limit outcome on every call, and typically forward those events to a downstream observability pipeline (Datadog, Splunk, New Relic) rather than logging full request bodies. Using that pipeline is usually simpler than re-implementing masking and retention in each service.
+
+## What NOT to Log
+
+This is equally important. Logging sensitive material creates a secondary attack vector: if your log store is compromised, every secret it contains is exposed.
+
+**Never log:**
+- The full API key value
+- Request or response bodies that may contain secrets (tokens, passwords, PII)
+- Internal database IDs that could aid an attacker in enumerating resources
+
+## Key Masking in Logs
+
+Always mask API keys before they reach your logging pipeline. This should be enforced at the application level, not left to individual developers.
+
+```python
+def mask_key(key: str) -> str:
+    """Show only the prefix and last 4 characters."""
+    if len(key) > 12:
+        return key[:7] + "****" + key[-4:]
+    return "****"
+
+# Result: "sk_live****o5p6"
+```
+
+Apply masking as a log filter or middleware so it catches all log output, including error messages and stack traces that might inadvertently contain key values.
+
+```javascript
+// Express middleware example: redact Authorization header from logs
+app.use((req, res, next) => {
+  const sanitized = { ...req.headers };
+  if (sanitized.authorization) {
+    sanitized.authorization = sanitized.authorization.slice(0, 12) + "****";
+  }
+  req.sanitizedHeaders = sanitized;
+  next();
+});
+```
+
+Be thorough. Keys can appear in query parameters, error messages, HTTP headers, and structured log fields. Audit your log output regularly to confirm masking is applied everywhere.
+
+## Alerting on Anomalies
+
+Monitoring without alerting is just data collection. Define alert rules that surface potential security incidents early.
+
+**High-priority alerts:**
+- Sustained spike in failed authentication attempts (possible brute force)
+- A single key making requests from multiple geographically distant IPs in a short window
+- Requests from a key that was recently revoked
+- Sudden increase in request volume for a single key (possible compromise)
+- Requests hitting endpoints outside the key's normal usage pattern
+
+**Medium-priority alerts:**
+- Keys approaching rate limits consistently
+- Keys that have not been [rotated](/docs/security/key-rotation) within your policy window
+- Unused keys (no activity in 30+ days) that are still active
+
+Set alert thresholds based on baseline behavior. A key that normally makes 100 requests per hour suddenly making 10,000 is significant; a key that normally makes 10,000 making 12,000 may not be.
+
+## Dashboards
+
+Build dashboards that give both real-time and historical views of key activity. General observability platforms (Datadog, Honeycomb, Grafana) and dedicated API analytics products each make good targets; if you authenticate at a gateway like Kong, Apigee, or Zuplo, the request log the gateway already emits is usually the cleanest source of truth to feed them. [Zuplo's analytics docs](https://zuplo.com/docs/articles/analytics?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) describe the structured request-log fields and forwarding options.
+
+**Useful dashboard panels:**
+- Total requests by key (top N most active)
+- Authentication failure rate over time
+- Request volume by endpoint
+- Geographic distribution of requests
+- Key lifecycle events (created, rotated, revoked) over time
+- P95 and P99 latency by key
+
+These dashboards serve dual purposes: operational monitoring for your infrastructure team and usage visibility for product and customer success teams investigating account-level behavior.
+
+## Compliance Considerations
+
+Depending on your industry and geography, you may be subject to regulations that dictate how authentication logs are handled.
+
+- **Retention periods.** Standards like SOC 2 and PCI DSS require audit logs to be retained for a defined period (typically 1 year minimum). Ensure your logging pipeline supports this.
+- **Access controls on logs.** Logs containing authentication data should be treated as sensitive. Restrict access to authorized personnel and log who accesses the logs themselves.
+- **Immutability.** For compliance-grade logging, ensure log entries cannot be modified or deleted. Append-only storage (such as S3 with Object Lock) or a dedicated SIEM provides this guarantee.
+- **Data residency.** If your users are in the EU or other jurisdictions with data residency requirements, ensure logs containing IP addresses and key identifiers are stored in compliant regions.
+
+Good logging hygiene is one of those things that feels invisible when it's working. But when an incident happens (and eventually one will), the quality of your logs determines whether you're responding in minutes or scrambling for days.
+
+## References
+
+- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html): the authoritative guide to what to log, what not to log, and how to protect the logs themselves.
+- [OWASP API Security Top 10 (2023), API9:2023 Improper Inventory Management](https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/) and [API10:2023 Unsafe Consumption of APIs](https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/): risk categories that monitoring surfaces before they become incidents.
+- [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/publications/detail/sp/800-92/final): foundational guidance for log collection, protection, and retention.
+- [NIST SP 800-53 Rev. 5, AU Control Family (Audit and Accountability)](https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search): the control baseline most compliance frameworks inherit from.
+- [CWE-532: Insertion of Sensitive Information into Log File](https://cwe.mitre.org/data/definitions/532.html): the exact weakness that unmasked keys in logs represent.
+- [CWE-778: Insufficient Logging](https://cwe.mitre.org/data/definitions/778.html): the complementary weakness when the logs you need don't exist during incident response.

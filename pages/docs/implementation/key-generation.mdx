@@ -1,0 +1,186 @@
+---
+title: "Key Generation"
+description: "How to generate secure, unpredictable API keys using cryptographic randomness, proper entropy, and safe encoding schemes."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Generate API keys from a cryptographically secure pseudo-random number generator (CSPRNG): `crypto.randomBytes`, `crypto.getRandomValues`, or `secrets.token_bytes`.
+- Aim for at least 128 bits of entropy (16 random bytes). 256 bits (32 bytes) is a comfortable default and costs nothing extra.
+- Encode with a URL-safe scheme: base64url is the usual default; base62 is the right choice when the alphabet must be purely alphanumeric.
+- Never use `Math.random()`, timestamps, auto-increment IDs, hashed user data, or UUIDs as the secret portion of an API key.
+- The raw key must be [hashed before storage](/docs/security/hashing-and-storage). What's on disk should never be usable as a credential.
+
+</TLDR>
+
+## Why Randomness Matters
+
+An API key is a secret. If an attacker can predict the next key your system will issue, they can forge credentials and access any account. The single most important property of a well-generated API key is that it is computationally infeasible to guess, even for someone who has seen millions of previously issued keys.
+
+This means you need **cryptographic randomness**, not `Math.random()`, not a timestamp, and not a database auto-increment. Once generated, keys must be [hashed before storage](/docs/security/hashing-and-storage) to protect them in the event of a database breach.
+
+## Cryptographic Randomness
+
+Every major runtime provides a cryptographically secure pseudo-random number generator (CSPRNG). These draw entropy from operating-system sources (hardware interrupts, interrupt timing jitter, CPU RDRAND instructions) and are designed to be unpredictable even to an observer who knows the implementation.
+
+### Node.js
+
+```javascript
+import { randomBytes } from "node:crypto";
+
+// Generate 32 bytes (256 bits) of random data
+const buffer = randomBytes(32);
+const apiKey = buffer.toString("base64url"); // URL-safe, no padding
+// Example: "k7GzV3xQm1bY9pLdA0wT5rN8hJfEuCsO2iXvDqR6yKg"
+```
+
+The `base64url` encoding is preferred over standard Base64 because it avoids `+`, `/`, and `=` characters that cause problems in URLs and HTTP headers.
+
+### Browser / Edge Runtimes
+
+```javascript
+const buffer = new Uint8Array(32);
+crypto.getRandomValues(buffer);
+const apiKey = btoa(String.fromCharCode(...buffer))
+  .replace(/\+/g, "-")
+  .replace(/\//g, "_")
+  .replace(/=+$/, "");
+```
+
+### Python
+
+```python
+import secrets
+import base64
+
+# Generate 32 bytes (256 bits) of random data
+raw = secrets.token_bytes(32)
+api_key = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+# Or use the built-in convenience function
+api_key = secrets.token_urlsafe(32)
+```
+
+The `secrets` module (Python 3.6+) exists specifically for this purpose. Never use `random` for security-sensitive values. It is seeded with predictable state and is designed for statistical simulations, not secret generation.
+
+## Entropy Requirements
+
+Entropy is measured in bits. A key with _n_ bits of entropy has 2^n possible values. The minimum you should target:
+
+| Entropy | Possible values | Brute-force difficulty |
+|---------|----------------|----------------------|
+| 128 bits | ~3.4 x 10^38 | Considered infeasible with current technology |
+| 256 bits | ~1.16 x 10^77 | Far exceeds any foreseeable attack capability |
+
+**128 bits is the practical minimum.** This is the same entropy threshold used by AES-128 and is broadly accepted as sufficient for secret tokens. If you are generating 16 random bytes, you have 128 bits of entropy. 32 bytes gives you 256 bits.
+
+Keep in mind that entropy refers to the raw random bytes, not the length of the encoded string. A 32-character hex string encodes only 16 bytes (128 bits), because each hex character carries just 4 bits.
+
+## Encoding Schemes
+
+Once you have your random bytes, you need to encode them as a printable string. The choice of encoding affects key length, character set, and compatibility.
+
+### Base64url
+
+- **Characters:** `A-Z`, `a-z`, `0-9`, `-`, `_`
+- **Efficiency:** 4 characters per 3 bytes (33% overhead)
+- **Best for:** General-purpose API keys
+
+### Base62
+
+- **Characters:** `A-Z`, `a-z`, `0-9`
+- **Efficiency:** Slightly less dense than Base64
+- **Best for:** Keys that must be purely alphanumeric (no special characters)
+
+```javascript
+const CHARSET =
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+function base62Encode(buffer) {
+  let result = "";
+  for (const byte of buffer) {
+    result += CHARSET[byte % 62];
+  }
+  return result;
+}
+```
+
+Note: the modulo approach above introduces a very slight bias (256 is not evenly divisible by 62). For most API key use cases this bias is negligible, but for maximum rigor, use rejection sampling to eliminate it entirely:
+
+```javascript
+import { randomBytes } from "node:crypto";
+
+const CHARSET =
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const MAX_UNBIASED = 256 - (256 % CHARSET.length); // 248
+
+function base62EncodeUnbiased(length) {
+  let result = "";
+  while (result.length < length) {
+    const byte = randomBytes(1)[0];
+    if (byte < MAX_UNBIASED) {
+      result += CHARSET[byte % CHARSET.length];
+    }
+    // Discard bytes >= 248 to avoid modulo bias
+  }
+  return result;
+}
+```
+
+Rejection sampling discards random bytes that fall in the biased range (248-255), so every character in the output is uniformly distributed across the 62-character alphabet.
+
+### Hex
+
+- **Characters:** `0-9`, `a-f`
+- **Efficiency:** 2 characters per byte (100% overhead)
+- **Best for:** Debugging, logging, environments where case-insensitivity matters
+
+Hex keys are the longest for the same entropy but are the easiest to work with in case-insensitive systems.
+
+## UUID-Based Keys
+
+UUIDs (specifically v4) are sometimes used as API keys. A UUIDv4 has 122 bits of randomness, which meets the 128-bit threshold approximately. However, there are drawbacks:
+
+- **Fixed format** with hyphens and a version nibble, making them easily identifiable
+- **No room for prefixes** or metadata without breaking the UUID format
+- **Slightly below 128 bits** of actual entropy (122 bits)
+
+UUIDs can work as identifiers but are not the best choice for secrets. If you use them, treat the UUID as a key identifier and pair it with a separate, high-entropy secret.
+
+## Avoiding Predictable Keys
+
+The following patterns are insecure and should never be used for API key generation:
+
+- **Sequential integers** or database auto-increment IDs
+- **Timestamps** or time-based values (even hashed)
+- **User-derived data** such as hashed emails or usernames
+- **Non-cryptographic PRNGs** like `Math.random()`, `random.random()`, or the Mersenne Twister
+- **Short keys** with fewer than 128 bits of entropy
+
+Any pattern an attacker can observe and extrapolate from is a vulnerability. The key must be indistinguishable from random noise to anyone who does not possess it.
+
+The next step is choosing a [key format and prefix scheme](/docs/implementation/key-formats-and-prefixes) that supports identification, routing, and leak detection.
+
+<HowTo
+  name="Generate a secure API key"
+  description="Use a CSPRNG to draw enough random bytes, encode with a URL-safe alphabet, and attach a recognisable prefix."
+  steps={[
+    { name: "Draw 32 bytes from a CSPRNG. ", text: "Use crypto.randomBytes(32) (Node.js), secrets.token_bytes(32) (Python), or crypto.getRandomValues on a 32-byte Uint8Array (browser / Workers). Never use Math.random(), timestamps, UUIDs, or auto-increment IDs." },
+    { name: "Encode URL-safely. ", text: "Convert the bytes to base64url (default) or base62 when an alphanumeric-only alphabet is required. Avoid standard base64, which contains '+', '/', and '=' characters that break URLs and query strings." },
+    { name: "Attach a prefix. ", text: "Prepend a short identifier such as sk_live_ or pk_test_ so you can tell environments apart, make secret scanners effective, and route requests during validation." },
+    { name: "Hand over the raw key exactly once. ", text: "Return the raw key in the creation response, then forget it: store only a SHA-256 hash so a database leak does not produce usable credentials.", url: "https://apikeys.guide/docs/security/hashing-and-storage" },
+  ]}
+/>
+
+## References
+
+- [NIST SP 800-90A Rev. 1: Recommendation for Random Number Generation Using Deterministic Random Bit Generators](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final): the specification behind `crypto.randomBytes` and `secrets.token_bytes`.
+- [NIST SP 800-63B: Digital Identity Guidelines §5.1.1.2](https://pages.nist.gov/800-63-3/sp800-63b.html#-5112-memorized-secret-verifiers): entropy requirements and guidance on random secret generation.
+- [CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)](https://cwe.mitre.org/data/definitions/338.html): the direct name for the `Math.random()` / Mersenne Twister anti-pattern this page warns against.
+- [CWE-331: Insufficient Entropy](https://cwe.mitre.org/data/definitions/331.html): failure mode when the random source is sufficient but too few bytes are drawn.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): broader context on generating and handling secrets like API keys.
+- [Python `secrets` module documentation](https://docs.python.org/3/library/secrets.html) and [Node.js `crypto.randomBytes`](https://nodejs.org/api/crypto.html#cryptorandombytessize-callback): runtime references for the CSPRNG APIs used in this guide.

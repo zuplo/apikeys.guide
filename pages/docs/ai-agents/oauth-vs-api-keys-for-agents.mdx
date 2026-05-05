@@ -1,0 +1,150 @@
+---
+title: "OAuth vs. API Keys in the Age of AI Agents"
+description: "Comparing static API keys and OAuth 2.1 for agent authentication, and when each approach is appropriate."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+Static API keys and OAuth tokens both grant access to APIs, but they behave very differently in agent-driven workflows. As AI agents become a primary interface for interacting with services, the security properties of each authentication method matter more than ever.
+
+<TLDR>
+
+- Static API keys compound badly in agent contexts: long-lived, broadly scoped, no built-in expiration, no revocation signal back to the agent.
+- OAuth 2.1 (mandated by the MCP spec for HTTP transports) gives you time-limited tokens, per-request scoping, refresh-token rotation, and server-side revocation: exactly the properties agent workflows need.
+- PKCE (Proof Key for Code Exchange) is required because AI agents acting as OAuth clients are public clients and can't securely hold a client secret.
+- Static keys remain acceptable for strictly local development, test environments with no real data, and short manually-managed sessions.
+- Production agent workflows, remote MCP servers, multi-tenant systems, and any sensitive operation should use OAuth 2.1. Static keys are the exception, not the default.
+
+</TLDR>
+
+## The Problem with Static Keys in Agent Contexts
+
+A static API key is a long-lived, bearer credential. Whoever has the string has the access. That model worked well enough when the only consumer was a server-side application running in a controlled environment. In an agent context, the risks compound:
+
+**Keys persist in context windows.** Once an agent reads an API key from a config file, `.env`, or terminal output, that key lives in the conversation's context. It may be retained across turns, summarized into memory, or logged by the AI provider.
+
+**No per-session scoping.** A static key grants the same permissions every time it's used. You can't issue a key that's valid only for the current agent session and automatically becomes useless afterward.
+
+**No built-in expiration.** Most static API keys are valid until manually revoked. If a key leaks through an [agent workflow](/docs/ai-agents/key-leakage-vectors-in-agent-workflows), it remains exploitable indefinitely unless someone notices and [rotates it](/docs/security/key-rotation).
+
+**No revocation signal.** When you revoke a static key, there's no mechanism to notify the agent or its tools that the credential is no longer valid. The agent will simply encounter 401 errors and may try workarounds.
+
+## How OAuth 2.1 Addresses These Risks
+
+OAuth 2.1 (the version mandated by the MCP specification for HTTP-based transports) was designed for exactly this kind of delegated, scoped, time-limited access.
+
+### Time-Limited Tokens
+
+OAuth access tokens have a defined expiration. A typical configuration issues tokens that are valid for 15 to 60 minutes. When the token expires, the agent must use a refresh token to obtain a new one, or re-authenticate entirely.
+
+```text
+Access token:  eyJhbGciOiJSUzI1NiIs... (expires in 30 minutes)
+Refresh token: dGhpcyBpcyBhIHJlZnJl... (expires in 7 days, single-use)
+```
+
+If the access token leaks through the agent's context window, the exposure window is measured in minutes, not months.
+
+### Scoped Access
+
+OAuth scopes let you define exactly what the token can do. An agent that only needs to read deployment status gets a token scoped to `read:deployments`, nothing else.
+
+```text
+Requested scopes: read:deployments read:logs
+Granted scopes:   read:deployments read:logs
+```
+
+Compare this to a static API key that typically grants access to every endpoint the key's owner can reach. For ways to limit static key permissions, see [Scoping & Permissions](/docs/security/scoping-and-permissions).
+
+### PKCE for Public Clients
+
+AI agents acting as OAuth clients often can't securely store a client secret (they're effectively public clients). OAuth 2.1 requires PKCE (Proof Key for Code Exchange), which protects the authorization flow without needing a client secret:
+
+```text
+1. Agent generates code_verifier (random string)
+2. Agent computes code_challenge = SHA256(code_verifier)
+3. Agent sends code_challenge with authorization request
+4. Authorization server returns authorization code
+5. Agent exchanges code + code_verifier for access token
+6. Server verifies SHA256(code_verifier) matches original challenge
+```
+
+This prevents an attacker who intercepts the authorization code from exchanging it for a token.
+
+### Token Rotation and Revocation
+
+Refresh tokens in OAuth 2.1 are single-use by default. Each time a refresh token is used, a new one is issued and the old one is invalidated. If a refresh token leaks, using it triggers rotation, and the legitimate client's next refresh attempt will fail, creating a detectable signal.
+
+Tokens can also be explicitly revoked server-side, immediately terminating an agent's access.
+
+## When Static API Keys Are Still Acceptable
+
+OAuth adds complexity. For some scenarios, static keys remain the pragmatic choice:
+
+**Local-only development.** If the agent and the service are both running on your machine, and the key never leaves localhost, the risk of context window leakage is contained. A static key for a local database or a development-only API is reasonable.
+
+**Development and testing environments.** Keys scoped to test environments with no real data carry lower risk. If a test key leaks, the impact is limited.
+
+**Short-lived, manually managed sessions.** If you generate a new key at the start of each coding session and revoke it when you're done, you get some of the benefits of token expiration through manual discipline.
+
+Even in these cases, prefer keys that are [short-lived](/docs/security/expiration-policies) and [narrowly scoped](/docs/ai-agents/least-privilege-keys-for-agents).
+
+## When OAuth Is Necessary
+
+**Production environments.** Any agent interaction with production APIs should use OAuth. The combination of token expiration, scoping, and revocation provides defense in depth against the leakage vectors inherent in agent workflows.
+
+**Remote MCP servers.** The MCP specification mandates OAuth 2.1 for HTTP-based transports. If you're building or connecting to a remote MCP server, OAuth isn't optional; it's the protocol requirement.
+
+**Multi-tenant systems.** When agents act on behalf of different users or organizations, OAuth's delegation model ensures each agent session gets appropriately scoped access to the right tenant's data.
+
+**Sensitive operations.** Any API that can modify billing, delete data, manage access controls, or access PII should require OAuth tokens with explicit scope grants.
+
+## Practical Guidance
+
+| Factor | Static API Key | OAuth 2.1 Token |
+|--------|---------------|-----------------|
+| Lifespan | Until revoked | Minutes to hours |
+| Scope | Typically broad | Per-request scoping |
+| Rotation | Manual | Automatic via refresh |
+| Revocation | Manual, no signal | Immediate, server-side |
+| Setup complexity | Low | Moderate |
+| Best for | Local dev, testing | Production, remote, multi-tenant |
+
+The direction is clear: as agents become a standard way to interact with APIs, the industry is moving toward OAuth-based authentication for agent workflows. Static keys will remain useful for local development, but any system that exposes agents to production data should invest in OAuth 2.1 support.
+
+## Frequently Asked Questions
+
+<FAQ
+  items={[
+    {
+      q: "Should AI agents use API keys or OAuth?",
+      a: "For anything beyond local development, prefer OAuth 2.1 with PKCE over long-lived static API keys. OAuth gives each agent session a short-lived access token, a refresh token, and a revocation endpoint, all of which limit blast radius when an agent's context is prompt-injected, logged, or exfiltrated.",
+    },
+    {
+      q: "Why are static API keys risky in agent contexts?",
+      a: "Agents ingest and emit text, call tools, and pass state through memory and logs. A static key that lives in a config file or environment variable can end up in a prompt, a trace, an error message, or a model provider's training data. It also has no expiry, so a leak stays exploitable until a human notices.",
+    },
+    {
+      q: "Does the Model Context Protocol (MCP) require OAuth?",
+      a: "The MCP specification requires OAuth 2.1 for HTTP-based servers and recommends it for everything else. Local stdio servers running on the user's own machine are the main exception, where API keys in a config file are still acceptable because the trust boundary is the local OS user.",
+    },
+    {
+      q: "Can I use OAuth client-credentials instead of PKCE for agents?",
+      a: "Only for machine-to-machine integrations where the client is trusted infrastructure (for example, a backend job). Agents that execute user instructions are public clients by definition and should use the authorization-code flow with PKCE so the end user's consent is explicit and scoped.",
+    },
+    {
+      q: "If I must use API keys, how do I make them safer for agents?",
+      a: "Issue an agent-specific key per session if possible; otherwise scope the key tightly (single API, read-only, tenant-specific), set a short expiration, rotate frequently, and log per-key usage so you can revoke instantly when something looks wrong. Never give an agent a root / account-wide key.",
+    },
+  ]}
+/>
+
+## References
+
+- [OAuth 2.1 Authorization Framework (IETF draft)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1): the protocol version this page recommends.
+- [RFC 6749: OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749): the baseline OAuth 2.0 specification that 2.1 tightens and consolidates.
+- [RFC 7636: Proof Key for Code Exchange (PKCE)](https://datatracker.ietf.org/doc/html/rfc7636): the mechanism that protects the authorization flow for public clients like AI agents.
+- [RFC 7009: OAuth 2.0 Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009) and [RFC 6819: OAuth 2.0 Threat Model and Security Considerations](https://datatracker.ietf.org/doc/html/rfc6819): the revocation and threat-modeling RFCs that motivate time-limited tokens.
+- [Model Context Protocol: Authorization Specification](https://modelcontextprotocol.io/specification/draft/basic/authorization): the MCP requirement that HTTP-based servers use OAuth 2.1.
+- [OWASP Top 10 for LLM Applications (2025), LLM06: Sensitive Information Disclosure](https://genai.owasp.org/llmrisk/llm06-sensitive-information-disclosure/): the risk that long-lived static keys in agent context most directly instantiate.

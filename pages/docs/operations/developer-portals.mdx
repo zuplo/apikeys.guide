@@ -1,0 +1,154 @@
+---
+title: "Developer Portals"
+description: "How self-service key portals work, what they need to include, and the build-or-buy trade-offs for key management UIs."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+A developer portal is where your API consumers create, manage, and monitor their API keys. It is the self-service interface that sits in front of the key management systems described elsewhere in this guide: [generation](/docs/implementation/key-generation), [rotation](/docs/security/key-rotation), [revocation](/docs/security/revocation), and [scoping](/docs/security/scoping-and-permissions).
+
+<TLDR>
+
+- The portal is where consumers create, manage, monitor, and rotate keys without filing a support ticket. For external APIs, it also shapes first impressions.
+- Minimum workflows: key creation (with scopes, labels, expiration), listing (masked + last-used + status), rotation with overlap, one-click revocation, and per-key usage/analytics.
+- Optimize for signup-to-first-successful-API-call. Pre-create a default key, show a pre-filled code snippet, and let the developer make a real call within a few minutes.
+- Use self-service for standard-tier keys with bounded scopes and rate limits. Keep approval workflows only where regulatory, compliance, or risk posture actually require them.
+- The portal itself is security-sensitive: authenticate its users (password + MFA or SSO), RBAC every action, audit every change, rate-limit key creation, and mask keys by default.
+
+</TLDR>
+
+For external-facing APIs, the portal is often the first thing a developer interacts with. The experience of getting from signup to first successful API call shapes their perception of your platform.
+
+## What a Portal Needs to Do
+
+At minimum, a developer portal for API key management must support these workflows:
+
+### Key Creation
+
+The developer creates a new key, optionally choosing:
+
+- A human-readable **name** or label (e.g., "Production - Payment Service")
+- **Scopes** or permissions the key should have
+- An **expiration date** (or accept the default policy)
+- The **environment** the key targets (production, staging, test)
+
+For [irretrievable keys](/docs/security/hashing-and-storage#retrievable-vs-irretrievable-keys), the full key is displayed exactly once after creation. After this point, only a masked version (prefix and last four characters) is visible. For [retrievable keys](/docs/security/hashing-and-storage#retrievable-vs-irretrievable-keys), the key is masked by default but can be revealed or copied from the dashboard at any time. In both cases, the creation screen should make the key easy to copy immediately.
+
+### Key Listing and Status
+
+A dashboard showing all active keys for the consumer's account:
+
+- Key name/label
+- Masked key value (e.g., `zpka_...3f8a`)
+- Creation date
+- [Expiration date](/docs/security/expiration-policies) (if set)
+- Last-used timestamp
+- Current status (active, expiring soon, expired, revoked)
+
+Last-used timestamp is particularly valuable. It helps developers identify which keys are still in active use and which can safely be revoked. A key that has not been used in 90 days is likely abandoned.
+
+### Rotation
+
+A rotation workflow that lets the developer:
+
+1. Create a new key (with the same scopes and metadata as the existing one)
+2. Deploy the new key to their application
+3. Verify the new key is working (check last-used timestamp)
+4. Revoke the old key
+
+The portal should support [multiple active keys per consumer](/docs/security/key-rotation) so that old and new keys can coexist during the transition period. Some portals automate this with a "rotate" button that creates the new key and schedules the old one for revocation after a configurable grace period.
+
+### Revocation
+
+One-click revocation with a confirmation step. The developer should be able to revoke any key immediately, and the [revocation](/docs/security/revocation) should take effect within the platform's propagation delay.
+
+Revocation should be self-service and not require a support ticket. If your consumers cannot revoke a compromised key instantly, you have a security gap.
+
+### Usage and Analytics
+
+Per-key usage data helps developers understand their API consumption and debug integration issues:
+
+- Request counts over time (hourly, daily, monthly)
+- Error rates (4xx, 5xx) per key
+- Current usage against [rate limits](/docs/security/rate-limiting) and quotas
+- Response latency percentiles
+
+This data is especially important for [monetized APIs](/docs/operations/api-monetization) where the developer needs to track usage against their plan limits and anticipate when they need to upgrade.
+
+## The Signup-to-First-Call Experience
+
+For external developer APIs, the portal should optimize for time-to-first-successful-API-call. Every unnecessary step between signup and a working integration is a point where developers drop off.
+
+A streamlined flow:
+
+1. **Signup.** Email and password, or SSO/OAuth. Avoid requiring payment information before the developer can test the API.
+2. **Key issuance.** A default key is created automatically on signup, or the developer creates one with a single click. Pre-select sensible defaults (test environment, standard scopes).
+3. **Quick-start code.** Show a copy-pasteable code snippet with the developer's actual key pre-filled. Include examples for common languages and tools (curl, JavaScript, Python).
+4. **First call.** The developer runs the snippet and sees a successful response. They are now integrated.
+
+The faster this loop completes, the more likely the developer is to continue building on your API.
+
+## Self-Service vs. Approval Workflows
+
+Not every key creation should be self-service. The right model depends on the risk profile and audience.
+
+**Self-service** is appropriate when:
+- The API has a free tier or trial that anyone can sign up for
+- Key scopes are predefined and do not grant access to sensitive operations
+- Rate limits and quotas provide sufficient protection against abuse
+- The target audience is external developers who expect instant access
+
+**Approval workflows** are appropriate when:
+- The API grants access to sensitive data or expensive operations
+- Keys need to be reviewed by a security or compliance team before issuance
+- Access is restricted to partners or enterprise customers
+- The organization requires audit trails for who approved each key
+
+Many APIs use both: self-service for standard-tier keys with limited scopes, and an approval workflow for elevated-access keys that unlock production data or higher rate limits.
+
+## Building vs. Using an Existing Portal
+
+A developer portal is a full-stack application: authentication, a database-backed dashboard, key management API endpoints, usage analytics, and documentation rendering. Building one from scratch is a significant investment.
+
+### Build When
+
+- Your portal needs deep integration with your internal identity system, billing, or custom workflows
+- You have specific UX requirements that no existing solution meets
+- You already have a frontend team and design system to build on
+- The portal is a differentiating part of your product experience
+
+### Use an Existing Solution When
+
+- You want a working portal in days, not months
+- Your team's focus is on the API itself, not the management layer
+- You need documentation hosting, API exploration, and key management in one place
+- You are already using an [API gateway](/docs/architecture/gateway-based-authentication) that includes a portal
+
+Managed API platforms such as Apigee, Kong, Tyk, and Zuplo typically include developer portal functionality. Each takes a different approach: Apigee and Kong ship portals as part of broader API management suites, Tyk offers a portal with its Dashboard, and Zuplo's portal auto-generates documentation from your OpenAPI spec and includes self-service key creation, rotation, and per-key usage visibility for consumers. Open-source projects such as Backstage, Redocly, and Scalar can provide documentation and API exploration features, but typically require significant customization to add key management workflows. [Zuplo's developer portal docs](https://zuplo.com/docs/articles/developer-portal?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) cover the OpenAPI rendering and self-service key flows in detail.
+
+The [build vs. buy](/docs/architecture/build-vs-buy) decision framework applies here with the same dynamics: building gives you control at the cost of ongoing maintenance; buying gives you speed at the cost of flexibility.
+
+## Portal Security Considerations
+
+The portal itself is a security-sensitive surface. It handles key creation and display, which means it touches raw key material.
+
+**Authenticate portal access.** The portal should require its own authentication (password + MFA, SSO, or OAuth). Access to the portal should not be gated solely by an API key, as that would be circular.
+
+**Authorize key operations.** In multi-user organizations, not every team member should be able to create, rotate, or revoke keys. Implement role-based access control: admins can create and revoke, developers can view and rotate, read-only users can see masked keys and usage data.
+
+**Audit all portal actions.** Every key creation, rotation, and revocation should be logged with who did it, when, and from where. This [audit trail](/docs/operations/logging-and-monitoring) is essential for incident response and compliance.
+
+**Rate-limit the portal API.** The portal's key creation endpoint should be rate-limited to prevent bulk key generation by compromised accounts. Similarly, the key listing endpoint should be protected against enumeration.
+
+**Secure key display.** Default to masking keys in the dashboard: show only the prefix and last four characters. Provide a **reveal button** that temporarily unmasks the full key on demand, and a **copy-to-clipboard button** that copies the key without displaying it on screen. The copy-without-reveal pattern is the strongest option: in an era of screen recordings, video calls, and high-resolution cameras, a key that never appears on screen cannot be captured visually. For [irretrievable keys](/docs/security/hashing-and-storage#retrievable-vs-irretrievable-keys), the full value is shown once at creation and never again, so use secure, short-lived display mechanisms (not browser local storage or cookies), and make it clear to the user that the key will not be retrievable after the creation modal is dismissed.
+
+## References
+
+- [OWASP Application Security Verification Standard (ASVS), V2 Authentication](https://owasp.org/www-project-application-security-verification-standard/): verification requirements for the portal's own authentication path.
+- [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html): baseline controls (MFA, session handling, account lockout) the portal must implement.
+- [OWASP Access Control Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Access_Control_Cheat_Sheet.html): patterns for the portal's role-based access to key operations.
+- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html): requirements for the audit trail that every portal action should produce.
+- [NIST SP 800-63B: Digital Identity Guidelines §5.1.1 Memorized Secrets](https://pages.nist.gov/800-63-3/sp800-63b.html#memsecret): authoritative guidance on password and MFA requirements for the portal's users.
+- [OWASP API Security Top 10 (2023), API2:2023 Broken Authentication](https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/): the failure modes a developer portal is most likely to introduce if its own auth is weak.

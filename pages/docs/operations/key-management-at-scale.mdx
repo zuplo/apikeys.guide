@@ -1,0 +1,135 @@
+---
+title: "Key Management at Scale"
+description: "Strategies for managing thousands of API keys, including organizational patterns, automated lifecycle management, self-service portals, and database design."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+Managing API keys is straightforward when you have a handful of users. It becomes an engineering challenge when you have thousands of keys across multiple teams, environments, and regions. This guide covers the patterns and practices that keep key management tractable as your platform grows.
+
+<TLDR>
+
+- At scale, the organizational model matters: team-based, project-based, or hierarchical (org → team → project). Pick one and be consistent.
+- Automate every stage of the lifecycle (provisioning, rotation, expiration, revocation) through your deployment pipeline, infrastructure-as-code, or secrets manager. Manual key management is a liability once you're past the first hundred keys.
+- A self-service portal is not optional at scale; it's the difference between "platform team handles every key request" and "consumers manage their own credentials."
+- Multi-region deployments need a deliberate replication strategy (synchronous vs. eventual consistency) and fast revocation propagation across regions.
+- Key storage needs an indexed hash column, a partial index excluding revoked rows, and a short-TTL cache. Partition once the table reaches millions of rows.
+
+</TLDR>
+
+## Organizational Patterns
+
+How you organize keys determines how easily you can audit, rotate, and revoke them. The right model depends on your platform's structure.
+
+### Team-Based Organization
+
+Keys are issued to teams or departments rather than individuals. This works well when access patterns are shared and accountability sits at the team level.
+
+- Each team gets a namespace or project that contains their keys
+- Team leads manage key creation and revocation within their scope
+- Audit logs are filterable by team
+
+### Project-Based Organization
+
+Keys are scoped to individual projects or services. This is common in microservice architectures where each service has its own identity.
+
+- One key per service per environment (e.g., `payments-service-prod`, `payments-service-staging`)
+- Keys inherit permissions from the project's role
+- Decommissioning a project automatically revokes its keys
+
+### Hierarchical Organization
+
+For larger platforms, a hierarchy of organizations, teams, and projects provides the most flexibility. Keys exist at the project level, teams own projects, and organizations own teams. This mirrors how companies like Stripe and AWS structure their access management.
+
+## Automated Lifecycle Management
+
+At scale, manual key management is a liability. Automate every stage of the key lifecycle.
+
+**Provisioning.** Use your platform's API or infrastructure-as-code tools to create keys as part of service deployment. Keys should be provisioned alongside the service that needs them, not as a separate manual step. Managed API platforms such as Kong, Apigee, Tyk, and Zuplo all expose programmatic key APIs that can be wired into a deployment pipeline or Terraform workflow for consumer and key creation. [Zuplo's API Key API reference](https://zuplo.com/docs/articles/api-key-api?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) documents the programmatic endpoints for creating consumers and keys.
+
+```yaml
+# Example: Terraform resource for key provisioning
+resource "apiplatform_api_key" "payments" {
+  name        = "payments-service-prod"
+  project_id  = apiplatform_project.payments.id
+  scopes      = ["transactions:read", "transactions:write"]
+  expires_in  = "90d"
+}
+```
+
+**[Rotation](/docs/security/key-rotation).** Schedule automated rotation using your secrets manager. The workflow is: create a new key, update the consuming service's configuration, verify the new key is in use, [revoke](/docs/security/revocation) the old key.
+
+**[Expiration](/docs/security/expiration-policies) and cleanup.** Set expiration policies at the organizational level. Keys that are not rotated within the policy window should trigger alerts, and keys unused for an extended period should be flagged for revocation.
+
+**Revocation.** When a service is decommissioned or a team member leaves, revocation should happen automatically through your identity provider or deployment pipeline integration, not through a manual checklist.
+
+## Self-Service Key Management
+
+A self-service portal reduces operational burden on your platform team and improves the developer experience for your users. Managed API platforms such as Apigee, Kong, Tyk, and Zuplo include a self-service portal out of the box, so consumers can create, rotate, and revoke their own keys, view usage data, and manage multiple keys per account without your team building a custom dashboard. [Zuplo's developer portal docs](https://zuplo.com/docs/articles/developer-portal?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) describe the included self-service key and usage flows.
+
+**Essential features:**
+- Key creation with scope selection and optional expiration
+- Dashboard showing all active keys with masked values, creation dates, and last-used timestamps
+- One-click revocation with confirmation
+- Rotation workflow that creates a new key and schedules the old one for deactivation
+- Activity logs showing per-key usage history
+- Bulk operations for managing multiple keys at once
+
+**Access control for the portal itself:**
+- Role-based access (admin can create/revoke, member can view and use)
+- Audit trail of all portal actions
+- SSO integration so portal access is governed by your identity provider
+
+## Multi-Region Considerations
+
+If your API serves users across multiple regions, key management needs to account for distributed infrastructure.
+
+- **Replication strategy.** Key data (hashes, metadata, scopes) must be available in every region where authentication happens. Decide between synchronous replication (stronger consistency, higher latency) and eventual consistency (faster, but brief windows where a newly created key may not work in all regions). Edge-native platforms like Cloudflare, Fastly, and Zuplo handle this replication automatically. [Zuplo's API key management docs](https://zuplo.com/docs/articles/api-key-management?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) state that key state propagates to 300+ edge locations within seconds.
+- **Regional key issuance.** For compliance or performance reasons, you may need keys that are scoped to specific regions. Encode the region in the key prefix (e.g., `sk_eu_`, `sk_us_`) so routing and validation can happen locally.
+- **Revocation propagation.** Revocation must propagate to all regions quickly. A key revoked in `us-east-1` should not remain valid in `eu-west-1` for an extended period. Use a push-based invalidation mechanism or short cache TTLs for key validation results.
+
+## Database Design for Key Storage
+
+Your key storage layer needs to handle high read throughput (every API request performs a lookup) with strong security guarantees.
+
+**Schema considerations:**
+
+```sql
+CREATE TABLE api_keys (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key_prefix      VARCHAR(12) NOT NULL,       -- "sk_live_" + last 4 chars
+    key_hash        BYTEA NOT NULL,             -- SHA-256 or argon2 hash
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    project_id      UUID REFERENCES projects(id),
+    name            VARCHAR(255),
+    scopes          TEXT[] NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at      TIMESTAMPTZ,
+    last_used_at    TIMESTAMPTZ,
+    revoked_at      TIMESTAMPTZ,
+    created_by      UUID REFERENCES users(id)
+);
+
+CREATE INDEX idx_api_keys_hash ON api_keys (key_hash) WHERE revoked_at IS NULL;
+CREATE INDEX idx_api_keys_org ON api_keys (organization_id);
+```
+
+**Performance tips:**
+- Index the [key hash](/docs/security/hashing-and-storage) column and filter out revoked keys in the index (partial index) so lookups only scan active keys.
+- Cache validated keys in memory (with a short TTL) to avoid a database round-trip on every request. Invalidate the cache entry when a key is revoked.
+- If using a hash function like argon2 that is intentionally slow, consider a two-tier approach: use a fast hash (SHA-256) for the initial lookup, then verify with the slow hash. Alternatively, hash once at creation and store only the fast hash if offline brute-force resistance is handled by key length and entropy.
+
+**Partitioning.** If your key table grows into the millions of rows, partition by organization or by a hash of the key prefix to keep query performance stable.
+
+Scaling key management is fundamentally about removing humans from the critical path. The more you can automate provisioning, rotation, and revocation, the fewer opportunities there are for mistakes, and the easier it is to maintain a strong security posture as your platform grows.
+
+## References
+
+- [NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final): key states, roles, and lifecycle requirements that shape the automation described on this page.
+- [NIST SP 800-53 Rev. 5, IA, AC, and AU control families](https://csrc.nist.gov/projects/risk-management/sp800-53-controls/release-search): the controls that audit logs, role-based access to the portal, and automated provisioning map to.
+- [OWASP Application Security Verification Standard (ASVS), V2 Authentication & V3 Session Management](https://owasp.org/www-project-application-security-verification-standard/): verification requirements for credential management at production scale.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): operational patterns for secrets-manager-based provisioning and rotation.
+- [Google Cloud: API keys best practices](https://cloud.google.com/docs/authentication/api-keys-best-practices): a reference for organizational patterns and regional key issuance.
+- [OWASP API Security Top 10 (2023), API8:2023 Security Misconfiguration](https://owasp.org/API-Security/editions/2023/en/0xa8-security-misconfiguration/): the category that inconsistent, manual, or abandoned key records fall into at scale.

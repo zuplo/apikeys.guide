@@ -1,0 +1,99 @@
+---
+title: "How AI Coding Assistants Expose Your API Keys"
+description: "Understanding how API keys end up in the context windows of AI coding assistants and the risks that creates."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+AI coding assistants like Claude Code, Cursor, and GitHub Copilot have become a standard part of the development workflow. They read your code, run your commands, and interact with your tools. That means they also read your secrets, and once an API key enters an LLM's context window, it's no longer under your control the way you might assume.
+
+<TLDR>
+
+- AI coding assistants (Claude Code, Cursor, Copilot) read broadly across `.env` files, terminal output, MCP configs, and source code, and every one of those is a vector for API keys to enter the model's context window.
+- Once a key is in context, it can be retained across sessions, logged by the provider, routed through third-party services, and passed as tool-call parameters to MCP servers you didn't intend to give it to.
+- Traditional secret-management assumes a clear process boundary. Agents blur that boundary: they read and retain text, and every API key is just text to an LLM.
+- The mitigations are specific: keep secrets out of the project directory, restrict agent file access, sanitize MCP outputs, use ephemeral credentials, disable persistent memory for sensitive sessions.
+- This is not a hypothetical risk. Documented attacks exist; see [key leakage vectors in agent workflows](/docs/ai-agents/key-leakage-vectors-in-agent-workflows) for the concrete taxonomy.
+
+</TLDR>
+
+## How Keys Enter the Context Window
+
+There are several paths an API key can take to end up in the prompt or context of an AI assistant.
+
+### .env Files and Configuration
+
+When you ask an AI assistant to help with a project, one of the first things it does is read the relevant files. If your `.env` file is in the project root, most assistants will read it, either automatically or when you reference environment variables in your prompt:
+
+```bash
+# .env
+STRIPE_SECRET_KEY=sk_live_51Hb8kP...
+DATABASE_URL=postgres://user:password@host:5432/db
+OPENAI_API_KEY=sk-proj-abc123...
+```
+
+The assistant now has your production secrets in its context. It didn't need them. It just read the directory.
+
+### Terminal History and Command Output
+
+AI coding agents that can execute commands will capture the output. If you run a command that prints secrets, or if your application logs include keys, the assistant sees everything:
+
+```bash
+$ env | grep API
+STRIPE_SECRET_KEY=sk_live_51Hb8kP...
+THIRD_PARTY_API_KEY=tp_key_9x8y7z...
+```
+
+Even a `curl -v` command that includes an `Authorization` header in its verbose output will feed that token into the context window.
+
+### MCP Server Configurations
+
+Model Context Protocol (MCP) server configurations often contain API keys in plaintext. These config files are read by the host application and frequently end up visible to the assistant:
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "command": "npx",
+      "args": ["@my-org/db-server"],
+      "env": {
+        "DB_CONNECTION_STRING": "postgres://admin:s3cret@prod.example.com/main"
+      }
+    }
+  }
+}
+```
+
+### Inline Code and Hardcoded Keys
+
+This is the most obvious vector, but it still happens. Developers paste keys directly into code while prototyping, and the assistant reads those files as part of its context.
+
+## What Happens to Keys in Context
+
+Once a key is in the context window, several things can happen:
+
+**Conversation history persistence.** Many AI tools retain conversation history across sessions. Your API key from Tuesday's debugging session is still sitting in the context on Friday when you resume the conversation.
+
+**Logging and telemetry.** Depending on the tool and your configuration, prompts and responses may be logged by the provider for debugging, abuse prevention, or model improvement. Those logs could contain your keys.
+
+**Third-party routing.** Some AI coding tools route requests through intermediary services or use multiple model providers. A key that entered through one provider's interface might transit through infrastructure you didn't expect.
+
+**Tool call propagation.** When agents use tools or MCP servers, the context (including any secrets in it) may be sent as part of tool call parameters. An agent trying to "help" might pass your database connection string to a tool that doesn't need it.
+
+## The Core Problem
+
+The fundamental issue is that AI assistants operate by ingesting text, and API keys are text. There is no built-in mechanism in most LLMs to treat certain tokens as sensitive, redact them from logs, or prevent them from being included in downstream tool calls.
+
+Traditional secret management assumes a clear boundary: your application reads the secret at runtime, and only the process that needs it has access, principles covered in [Hashing & Storage](/docs/security/hashing-and-storage) and [Best Practices for Consumers](/docs/best-practices/for-consumers). AI assistants blur this boundary. They read broadly, retain context, and interact with external systems, creating a new category of exposure that existing practices around `.gitignore` and environment variables were never designed to address.
+
+The sections that follow in this guide cover specific mitigation strategies, from [securing MCP configurations](/docs/ai-agents/securing-keys-in-mcp-configs) to designing [least-privilege key access for agent workflows](/docs/ai-agents/least-privilege-keys-for-agents).
+
+## References
+
+- [Model Context Protocol: Specification](https://modelcontextprotocol.io/specification) and [MCP Security Best Practices](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices): the protocol documents that govern how agent tools read, execute, and forward context.
+- [OWASP Top 10 for LLM Applications (2025), LLM06: Sensitive Information Disclosure](https://genai.owasp.org/llmrisk/llm06-sensitive-information-disclosure/): the risk category that encompasses API keys ending up in model context windows.
+- [OWASP Top 10 for LLM Applications, LLM07: System Prompt Leakage](https://genai.owasp.org/llmrisk/llm07-system-prompt-leakage/) and [LLM08: Vector and Embedding Weaknesses](https://genai.owasp.org/llmrisk/llm08-vector-and-embedding-weaknesses/): related failure modes that apply to persistent memory and conversation history.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): the boundary-preserving practices that agents routinely disrupt.
+- [CWE-200: Exposure of Sensitive Information](https://cwe.mitre.org/data/definitions/200.html) and [CWE-532: Insertion of Sensitive Information into Log File](https://cwe.mitre.org/data/definitions/532.html): the weaknesses that map directly to "key was in context, then got logged or forwarded."

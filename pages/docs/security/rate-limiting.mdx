@@ -1,0 +1,178 @@
+---
+title: "Rate Limiting"
+description: "How to protect your API with per-key rate limits, choosing the right algorithm, and communicating limits to consumers."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+<TLDR>
+
+- Rate limit per API key, not per IP: keys give you consumer-scoped control that survives NAT, load balancers, and CDN egress.
+- Sliding window is the best default for most APIs; token bucket wins when you need to allow controlled bursts; fixed window is only OK for low-stakes limits.
+- Always return `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` headers so consumers can self-regulate, and `Retry-After` with a 429 when they hit the ceiling.
+- Tie limits to the consumer's plan tier (free / pro / enterprise) and store the tier in the key record for one-request enforcement.
+- Pair rate limits with anomaly detection, endpoint-specific caps, and cost-based metering. A single fixed limit leaves obvious gaps.
+
+</TLDR>
+
+## Why Rate Limit by API Key
+
+Rate limiting protects your API from abuse, whether intentional (credential stuffing, scraping) or accidental (a buggy loop that sends thousands of requests per second). Applying limits per API key rather than per IP address gives you fine-grained control: you can set different thresholds for different consumers based on their plan, trust level, or use case.
+
+Without per-key rate limits, a single misbehaving integration can degrade performance for all your users.
+
+## Algorithms
+
+### Fixed Window
+
+Divide time into fixed intervals (e.g., one-minute windows). Each key gets a counter that resets at the start of each window.
+
+- **Pros**: Simple to implement, low memory usage.
+- **Cons**: Allows burst traffic at window boundaries. A consumer could send 100 requests at 11:59:59 and another 100 at 12:00:00, effectively doubling their limit in a two-second span.
+
+### Sliding Window
+
+Track requests using a rolling time window. Instead of resetting a counter, you count the number of requests in the last N seconds at any given moment.
+
+- **Pros**: Smooth enforcement, no boundary burst problem.
+- **Cons**: Slightly more complex to implement. A common approximation is the **sliding window log**, which stores a timestamp for each request, or the **sliding window counter**, which blends the current and previous fixed windows.
+
+### Token Bucket
+
+Each key has a "bucket" of tokens that refills at a steady rate. Each request consumes one token. If the bucket is empty, the request is rejected.
+
+- **Pros**: Naturally allows short bursts while enforcing a sustained rate. Configurable burst size and refill rate.
+- **Cons**: More state to manage per key.
+
+| Algorithm | Burst Handling | Complexity | Best For |
+|---|---|---|---|
+| Fixed window | Allows boundary bursts | Low | Simple APIs, low-stakes limits |
+| Sliding window | Smooth enforcement | Medium | Most production APIs |
+| Token bucket | Controlled bursts | Medium | APIs with bursty traffic patterns |
+
+## Response Headers
+
+Communicate rate limit status on every response so consumers can self-regulate. The emerging standard uses these headers:
+
+```http
+HTTP/1.1 200 OK
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 847
+X-RateLimit-Reset: 1718400000
+```
+
+| Header | Meaning |
+|---|---|
+| `X-RateLimit-Limit` | Maximum requests allowed in the current window |
+| `X-RateLimit-Remaining` | Requests remaining in the current window |
+| `X-RateLimit-Reset` | Unix timestamp when the window resets |
+
+When a consumer exceeds their limit, return a `429 Too Many Requests` response with a `Retry-After` header:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 30
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1718400000
+
+{
+  "error": "rate_limit_exceeded",
+  "message": "You have exceeded 1000 requests per minute. Retry after 30 seconds."
+}
+```
+
+## Graduated Limits by Tier
+
+Not all consumers are equal. A free-tier user exploring your API should have lower limits than an enterprise customer running production workloads. Tie rate limits to the consumer's plan or tier:
+
+| Tier | Requests / minute | Requests / day |
+|---|---|---|
+| Free | 60 | 1,000 |
+| Pro | 600 | 50,000 |
+| Enterprise | 6,000 | Unlimited |
+
+Store the tier alongside the API key metadata so your [rate limiter can look it up](/docs/implementation/validation-and-lookup) on each request. When a consumer upgrades their plan, their rate limits increase immediately, with no key rotation needed.
+
+## Abuse Prevention
+
+Rate limits alone don't stop all abuse. Combine them with these techniques:
+
+- **Anomaly detection**: Flag keys that suddenly spike from 10 requests/minute to 5,000. This may indicate a compromised key. See [Logging & Monitoring](/docs/operations/logging-and-monitoring) for guidance on setting up alerts.
+- **Endpoint-specific limits**: Apply tighter limits on expensive operations (search, report generation) than on lightweight reads.
+- **Concurrent request limits**: Cap the number of in-flight requests per key. This prevents a consumer from opening hundreds of parallel connections.
+- **Cost-based limits**: If your API has endpoints with wildly different computational costs, consider rate limiting by "cost units" rather than raw request count.
+- **Automatic throttling**: Instead of hard-rejecting requests at the limit, gradually slow responses (increasing latency) as a key approaches its ceiling. This gives the consumer a signal to back off without causing errors.
+
+## Sliding Window Rate Limiter Example
+
+Here is a minimal sliding window rate limiter using an in-memory `Map`. Each key tracks a list of request timestamps, and requests outside the current window are pruned on each check.
+
+```javascript
+const rateLimitStore = new Map();
+
+function slidingWindowRateLimit(apiKey, maxRequests, windowMs) {
+  const now = Date.now();
+  const windowStart = now - windowMs;
+
+  // Get or initialize the request log for this key
+  let timestamps = rateLimitStore.get(apiKey) || [];
+
+  // Remove entries outside the current window
+  timestamps = timestamps.filter((t) => t > windowStart);
+
+  if (timestamps.length >= maxRequests) {
+    const oldestInWindow = timestamps[0];
+    const retryAfter = Math.ceil((oldestInWindow + windowMs - now) / 1000);
+    return { allowed: false, remaining: 0, retryAfter };
+  }
+
+  timestamps.push(now);
+  rateLimitStore.set(apiKey, timestamps);
+
+  return {
+    allowed: true,
+    remaining: maxRequests - timestamps.length,
+    retryAfter: null,
+  };
+}
+
+// Usage in an Express-style middleware
+function rateLimitMiddleware(req, res, next) {
+  const apiKey = req.apiKeyRecord.id;
+  const result = slidingWindowRateLimit(apiKey, 100, 60 * 1000); // 100 req/min
+
+  res.setHeader("X-RateLimit-Limit", "100");
+  res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+
+  if (!result.allowed) {
+    res.setHeader("Retry-After", String(result.retryAfter));
+    return res.status(429).json({
+      error: "rate_limit_exceeded",
+      message: `Too many requests. Retry after ${result.retryAfter} seconds.`,
+    });
+  }
+
+  next();
+}
+```
+
+This approach works well for single-instance deployments and prototyping. For production systems with multiple server instances, replace the in-memory `Map` with a shared data store like Redis.
+
+## Implementation Tips
+
+- Use a centralized data store (Redis, Memcached) for rate limit counters so that limits are enforced consistently across all API server instances.
+- Apply rate limiting at the API gateway or edge layer, before the request reaches your application logic. This is native functionality in Kong, AWS API Gateway, Cloudflare, and Zuplo, each of which supports per-consumer (or per-API-key) limits that can be tiered by plan without custom code. [Zuplo's rate-limiting policy docs](https://zuplo.com/docs/articles/rate-limiting?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys) cover the per-consumer and tiered-by-plan patterns.
+- Log rate limit events with the API key identifier so you can review patterns and adjust limits over time.
+- Provide a `/v1/rate-limit` or similar endpoint where consumers can check their current usage without burning a request against their actual quota.
+
+## References
+
+- [RFC 6585: Additional HTTP Status Codes (§4 defines 429 Too Many Requests)](https://datatracker.ietf.org/doc/html/rfc6585#section-4): the status code to return when a key exceeds its limit.
+- [RFC 7231 §7.1.3: Retry-After header](https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.3): the standard header that tells clients when to retry.
+- [RateLimit header fields for HTTP (IETF draft)](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/): the emerging standardization of the `X-RateLimit-*` headers this page uses.
+- [OWASP API Security Top 10 (2023), API4:2023 Unrestricted Resource Consumption](https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/): the category of risk rate limiting exists to mitigate.
+- [OWASP Credential Stuffing Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Credential_Stuffing_Prevention_Cheat_Sheet.html): the brute-force scenario that per-key rate limits make expensive to the attacker.
+- [Google Cloud: Rate limiting strategies and techniques](https://cloud.google.com/architecture/rate-limiting-strategies-techniques): practical comparison of the algorithms covered on this page at scale.

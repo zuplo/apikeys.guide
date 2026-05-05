@@ -1,0 +1,142 @@
+---
+title: "Securing API Keys in MCP Server Configurations"
+description: "How to avoid storing plaintext API keys in MCP server configuration files and use credential stores instead."
+datePublished: "2026-04-22"
+dateModified: "2026-04-22"
+---
+
+<span class="akg-updated" data-updated="2026-04-22">Updated April 2026</span>
+
+The Model Context Protocol (MCP) lets AI assistants connect to external tools and data sources through server processes. The most common transport (stdio) launches these servers as child processes with environment variables passed directly from a host configuration file. That configuration file almost always contains plaintext secrets.
+
+<TLDR>
+
+- MCP host apps (Claude Desktop, Cursor) store server configs as plaintext JSON on your filesystem, and those files routinely contain live API keys in their `env` blocks.
+- Replace hard-coded secrets with references: macOS Keychain (`security find-generic-password`), 1Password CLI (`op run`), or at minimum environment-variable interpolation.
+- For HTTP-based MCP servers, the spec mandates OAuth 2.1: no API keys in config files at all. Prefer remote MCP servers with OAuth over stdio servers with static credentials whenever possible.
+- If you must keep secrets in config temporarily, `chmod 600` the file and exclude the path from backups and cloud sync.
+- This class of leak is one of the documented [key leakage vectors in agent workflows](/docs/ai-agents/key-leakage-vectors-in-agent-workflows); handle it explicitly, not by hoping the file stays private.
+
+</TLDR>
+
+## The Default: Plaintext Keys on Disk
+
+MCP host applications like Claude Desktop, Cursor, and others store server configurations in JSON files on your local filesystem:
+
+```json
+// ~/.config/claude/claude_desktop_config.json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "POSTGRES_CONNECTION_STRING": "postgres://admin:prod-password@db.example.com/main"
+      }
+    }
+  }
+}
+```
+
+These files sit on disk in plaintext. Any process running as your user can read them. If your machine is compromised, or if you accidentally sync this file to a backup service, those keys are exposed. This is one of several [key leakage vectors in agent workflows](/docs/ai-agents/key-leakage-vectors-in-agent-workflows).
+
+## Use OS-Level Credential Stores
+
+Instead of placing raw secrets in your MCP config, reference credentials stored in your operating system's secure credential store.
+
+### macOS Keychain
+
+Store the secret in the keychain, then retrieve it at launch:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "GITHUB_PERSONAL_ACCESS_TOKEN=$(security find-generic-password -s 'mcp-github-token' -w) npx -y @modelcontextprotocol/server-github"
+      ]
+    }
+  }
+}
+```
+
+### 1Password CLI
+
+If you use 1Password, its CLI can inject secrets at process start:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "op",
+      "args": [
+        "run", "--",
+        "npx", "-y", "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "op://Vault/MCP GitHub Token/credential"
+      }
+    }
+  }
+}
+```
+
+The `op run` command resolves the secret reference at runtime. The actual token never appears in the config file.
+
+### Environment Variable References
+
+At minimum, reference environment variables that are set in your shell profile rather than hardcoding values in the config:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Note that support for environment variable interpolation depends on the host application. Check your specific tool's documentation.
+
+## What the MCP Spec Says
+
+The MCP specification provides clear guidance on credential handling based on transport type:
+
+**Stdio transport:** Servers launched via stdio receive their configuration from the host process. The spec recommends that servers retrieve credentials from the environment rather than expecting them in the protocol messages. The host is responsible for providing secrets through environment variables at launch time.
+
+**HTTP-based transports (Streamable HTTP):** For remote MCP servers, the spec mandates OAuth 2.1 as the authorization mechanism. This means no API keys in configuration files at all. The client authenticates through an OAuth flow, receives a scoped token, and the server validates it on each request. This is the preferred approach for any production or multi-user deployment.
+
+## Practical Steps
+
+1. **Audit your MCP config files now.** Search for `claude_desktop_config.json`, `.cursor/mcp.json`, or similar files and check for plaintext secrets.
+
+2. **Move secrets to a credential store.** Use your OS keychain, 1Password CLI, or a dedicated secrets manager like Doppler or AWS Secrets Manager.
+
+3. **Restrict file permissions.** If you must keep secrets in config files temporarily, ensure the file is readable only by your user: `chmod 600 claude_desktop_config.json`.
+
+4. **Prefer remote MCP servers with OAuth.** When available, use HTTP-based MCP servers that support [OAuth 2.1 instead of stdio servers with static credentials](/docs/ai-agents/oauth-vs-api-keys-for-agents).
+
+5. **Exclude config files from backups and sync.** Add MCP config paths to your backup exclusions and cloud sync ignore lists.
+
+## References
+
+- [Model Context Protocol: Specification](https://modelcontextprotocol.io/specification) and [Authorization](https://modelcontextprotocol.io/specification/draft/basic/authorization): the transport-specific guidance that distinguishes stdio credential handling from HTTP OAuth 2.1.
+- [MCP Security Best Practices](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices): official guidance that covers configuration handling and credential storage.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html): secrets-manager-based injection patterns referenced throughout this page.
+- [OWASP Top 10 for LLM Applications (2025), LLM06: Sensitive Information Disclosure](https://genai.owasp.org/llmrisk/llm06-sensitive-information-disclosure/): the risk category this page mitigates.
+- [CWE-312: Cleartext Storage of Sensitive Information](https://cwe.mitre.org/data/definitions/312.html) and [CWE-798: Use of Hard-coded Credentials](https://cwe.mitre.org/data/definitions/798.html): the two weaknesses that hard-coded MCP config secrets directly represent.
+- [Apple Developer: `security` command-line tool](https://developer.apple.com/library/archive/documentation/Darwin/Reference/ManPages/man1/security.1.html): reference for the macOS Keychain access used in the example above.
