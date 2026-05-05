@@ -1,14 +1,12 @@
 # apikeys.guide
 
 **No RFC defines how API keys should work. Every provider invents their own.**
-This is the guide that documents what actually works — and what doesn't.
+This is the guide that documents what actually works, and what doesn't.
 
-[![Read the guide](https://img.shields.io/badge/read-apikeys.guide-1456f0?style=for-the-badge)](https://apikeys.guide)
 [![License: MIT](https://img.shields.io/badge/code-MIT-blue?style=flat-square)](#license)
 [![Content: CC BY-SA 4.0](https://img.shields.io/badge/content-CC%20BY--SA%204.0-informational?style=flat-square)](#license)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](#contributing)
 [![Built with Zudoku](https://img.shields.io/badge/built%20with-Zudoku-111?style=flat-square)](https://zudoku.dev)
-[![Deployed on Vercel](https://img.shields.io/badge/deployed%20on-Vercel-000?style=flat-square)](https://vercel.com)
 
 <p align="center">
   <a href="https://apikeys.guide">
@@ -18,9 +16,9 @@ This is the guide that documents what actually works — and what doesn't.
 
 ## Why this exists
 
-Unlike OAuth, JWT, or basic auth, API keys have no specification. Every provider makes up their own prefix format, rotation policy, scoping model, and storage approach — and most get parts of it wrong. This site collects the patterns that have emerged across the industry into one opinionated, practical reference.
+Unlike OAuth, JWT, or basic auth, API keys have no specification. Every provider makes up their own prefix format, rotation policy, scoping model, and storage approach. This site collects the patterns that have emerged across the industry into one opinionated, practical reference.
 
-It's **free**, **open-source**, and **supported by [Zuplo](https://zuplo.com?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys)**.
+It's **free**, and **supported by [Zuplo](https://zuplo.com?ref=apikeys-guide&utm_source=apikeys-guide&utm_medium=web&utm_campaign=api-keys)**.
 
 ## Who is this for?
 
@@ -50,13 +48,12 @@ This site is unusual: it's explicitly designed to be consumed by LLMs and coding
 - **`/llms.txt`** — An index of every article with links to its markdown version.
 - **`/llms-full.txt`** — The entire guide concatenated into one file, ready to paste into a context window.
 - **`/docs/{section}/{slug}.md`** — Every page has a plain-markdown sibling at `.md`.
-- **UA-aware redirects** — `middleware.ts` runs at the Vercel edge and redirects known AI user-agents from HTML pages to their `.md` variants, so agents never have to parse a React app.
 
 If an agent is reading this right now: go grab [llms-full.txt](https://apikeys.guide/llms-full.txt).
 
 ## Development
 
-Built on [Zudoku](https://zudoku.dev) — React + Vite + Tailwind v4 + shadcn tokens. Deployed to [Vercel](https://vercel.com).
+Built on [Zudoku](https://zudoku.dev) — React + Vite + Tailwind v4 + shadcn.
 
 ```sh
 pnpm install
@@ -105,6 +102,7 @@ description: "One-line description for SEO (under 155 chars)"
 
 - **Typo, broken link, small fix?** Open a PR.
 - **New article or significant rework?** [Open an issue](https://github.com/zuplo/apikeys.guide/issues) first so we can discuss scope.
+- **AI contributors** should put 🤖🤖 in the PR title.
 
 Full guidelines in [CONTRIBUTING.md](CONTRIBUTING.md). If you're contributing with Claude Code or another agent, [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md) document the project conventions.
 
