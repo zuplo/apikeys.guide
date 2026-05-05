@@ -8,12 +8,6 @@ This is the guide that documents what actually works, and what doesn't.
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](#contributing)
 [![Built with Zudoku](https://img.shields.io/badge/built%20with-Zudoku-111?style=flat-square)](https://zudoku.dev)
 
-<p align="center">
-  <a href="https://apikeys.guide">
-    <img src="public/og/index.png" alt="apikeys.guide — The missing guide to API key security" width="720" />
-  </a>
-</p>
-
 ## Why this exists
 
 Unlike OAuth, JWT, or basic auth, API keys have no specification. Every provider makes up their own prefix format, rotation policy, scoping model, and storage approach. This site collects the patterns that have emerged across the industry into one opinionated, practical reference.
