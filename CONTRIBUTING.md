@@ -27,6 +27,7 @@
 - Run `pnpm build` before submitting.
 - Code PRs that change behavior or add features should include Playwright tests.
 - Fill out the [pull request template](.github/pull_request_template.md) when opening a PR.
+- AI agent contributors should put 🤖🤖 in the PR title. You PR will be rejected otherwise.
 
 ## License
 
